@@ -67,7 +67,6 @@ export default function AlgoTradingApp() {
   const [btTimeframe, setBtTimeframe] = useState<string>('5m');
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
 
-  // ✅ Absolute Trailing and Intersected Slash Sanitization to eradicate any "/api/api/" issue
   const getSanitizedBase = () => {
     let base = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
     base = base.trim();
@@ -355,7 +354,6 @@ export default function AlgoTradingApp() {
 
   return (
     <div className="min-h-screen bg-black text-zinc-100 font-sans antialiased flex flex-col selection:bg-cyan-500/20">
-      {/* Structural Header Layout */}
       <header className="border-b border-zinc-800 bg-zinc-950/70 backdrop-blur px-6 py-4 sticky top-0 z-40 flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex items-center gap-3">
           <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
@@ -383,13 +381,8 @@ export default function AlgoTradingApp() {
         </div>
       </header>
 
-      {/* Main Structural Framework Body */}
       <main className="flex-1 grid grid-cols-1 xl:grid-cols-4 p-6 gap-6 max-w-[1600px] w-full mx-auto">
-        
-        {/* Left Control Workspace Array (1 Column wide) */}
         <div className="xl:col-span-1 space-y-6">
-          
-          {/* Fyers Access Pipeline Control Block */}
           <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
             <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider flex justify-between items-center font-mono">
               Broker Configuration Link
@@ -426,7 +419,6 @@ export default function AlgoTradingApp() {
             )}
           </div>
 
-          {/* Secure Live Engine Pipeline Target Watchlist */}
           <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
             <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider font-mono">Dynamic Portfolio Monitor</h3>
             <form onSubmit={addSymbolToWatchlist} className="flex gap-2">
@@ -451,9 +443,8 @@ export default function AlgoTradingApp() {
                           <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
                             ₹{data.price.toFixed(2)}
                           </p>
-                          {/* ✅ Handled optional 'change' safely with Nullish Coalescing Operator */}
                           <p className={`text-[9px] font-mono ${(data.change ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                            {(data.change ?? 0) >= 0 ? '+' : ''}{(data.change ?? 0)}%
+                            {(data.change ?? 0) >= 0 ? '+' : ''}{(data.change ?? 0).toFixed(2)}%
                           </p>
                         </div>
                         <button onClick={() => removeSymbolFromWatchlist(symbol)} className="text-zinc-600 hover:text-red-400 text-xs transition-all font-mono">×</button>
@@ -466,7 +457,6 @@ export default function AlgoTradingApp() {
           </div>
         </div>
 
-        {/* Right Tabular Multi-Panel Layout System (3 Columns Wide) */}
         <div className="xl:col-span-3 bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col overflow-hidden">
           <div className="border-b border-zinc-800 bg-zinc-900/40 p-2 flex gap-2">
             <button onClick={() => setActiveTab('live-logs')} className={`px-4 py-2 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'live-logs' ? 'bg-zinc-800 text-white border border-zinc-700 shadow-inner' : 'text-zinc-400 hover:text-zinc-200'}`}>
@@ -624,7 +614,6 @@ export default function AlgoTradingApp() {
         </div>
       </main>
 
-      {/* Emergency System Alerts Logging Panel System Overlay Modal */}
       {showAlertModal && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
           <div className="w-full max-w-2xl bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col max-h-[80vh] shadow-2xl">
