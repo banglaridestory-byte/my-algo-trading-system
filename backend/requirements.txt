@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pydantic
-pandas
+pandas<2.0.0
+numpy<2.0.0
 pandas-ta
 fyers-apiv3
-numpy
