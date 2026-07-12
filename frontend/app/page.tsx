@@ -27,6 +27,15 @@ interface BacktestResult {
   duration_tested: string;
 }
 
+// লাইভ প্রাইস স্টোর করার ইন্টাফেস
+interface LivePrices {
+  [symbol: string]: {
+    price: number;
+    change?: number; // শতাংশ বা পয়েন্টে পরিবর্তন (ঐচ্ছিক)
+    direction?: 'up' | 'down' | 'neutral';
+  };
+}
+
 export default function AlgoTradingApp() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [username, setUsername] = useState<string>('');
@@ -48,6 +57,9 @@ export default function AlgoTradingApp() {
   const [newSymbol, setNewSymbol] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('live-logs');
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
+  
+  // 📈 লাইভ রানিং প্রাইস ট্র্যাকিং স্টেট
+  const [livePrices, setLivePrices] = useState<LivePrices>({});
   
   // অ্যালার্ট বেল স্টেট ম্যানেজমেন্ট
   const [alertLogs, setAlertLogs] = useState<{ id: number; text: string; type: 'success' | 'error' | 'signal' }[]>([]);
@@ -87,12 +99,27 @@ export default function AlgoTradingApp() {
       const ws = new WebSocket(`${WS_BASE}/ws/alerts`);
       ws.onmessage = (event) => {
         const parseData = JSON.parse(event.data);
+        
+        // ১. অ্যালার্ট বা নতুন সিগন্যাল রিসিভ হ্যান্ডলার
         if (parseData.event === "NEW_CALL") {
           pushAlert(parseData.message, 'signal');
           if (audioRef.current) audioRef.current.play().catch(() => {});
           setCallHistory(prev => [parseData.data, ...prev]);
         } else if (parseData.event === "SYSTEM_ERROR") {
           pushAlert(parseData.message, 'error');
+        }
+        
+        // ২. 🔴 রিয়েল-টাইম প্রাইস আপডেট হ্যান্ডলার (যদি ব্যাকএন্ড থেকে এই ইভেন্টটি পাঠানো হয়)
+        else if (parseData.event === "PRICE_UPDATE") {
+          const { symbol, price, change } = parseData.data;
+          setLivePrices(prev => {
+            const oldPrice = prev[symbol]?.price || price;
+            const direction = price > oldPrice ? 'up' : price < oldPrice ? 'down' : prev[symbol]?.direction || 'neutral';
+            return {
+              ...prev,
+              [symbol]: { price, change, direction }
+            };
+          });
         }
       };
       return () => ws.close();
@@ -146,6 +173,13 @@ export default function AlgoTradingApp() {
       if (res.ok) {
         const data = await res.json();
         setWatchlist(data.watchlist || []);
+        
+        // প্রারম্ভিক ডামি বা বেস প্রাইস সেটআপ (যতক্ষণ না WS ডাটা আসছে)
+        const initialPrices: LivePrices = {};
+        (data.watchlist || []).forEach((sym: string) => {
+          initialPrices[sym] = { price: 0.00, change: 0, direction: 'neutral' };
+        });
+        setLivePrices(initialPrices);
       }
     } catch (err) { console.error(err); }
   };
@@ -173,6 +207,7 @@ export default function AlgoTradingApp() {
       const data = await res.json();
       if (res.ok) {
         setWatchlist(data.watchlist);
+        setLivePrices(prev => ({ ...prev, [cleanSymbol]: { price: 0.00, change: 0, direction: 'neutral' } }));
         setNewSymbol('');
         pushAlert(`${cleanSymbol} locked into pipeline.`, 'success');
       } else {
@@ -191,6 +226,11 @@ export default function AlgoTradingApp() {
       const data = await res.json();
       if (res.ok) {
         setWatchlist(data.watchlist);
+        setLivePrices(prev => {
+          const updated = { ...prev };
+          delete updated[symbol];
+          return updated;
+        });
         pushAlert(`${symbol} purged from stream.`, 'success');
       }
     } catch (err) { console.error(err); }
@@ -333,7 +373,7 @@ export default function AlgoTradingApp() {
 
       <main className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
         
-        {/* গ্রিড প্যানেল ১: ক্রেডেনশিয়াল ও ওয়াচলিস্ট */}
+        {/* গ্রিড প্যানেল ১: ক্রেডেনশিয়াল ও অপারেশন কন্ট্রোল */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           
           {/* Fyers Developer Vault */}
@@ -387,23 +427,76 @@ export default function AlgoTradingApp() {
           </div>
         </section>
 
-        {/* ওয়াচলিস্ট ও সিম্বল সার্চ এডার */}
+        {/* 💳 ওয়াচলিস্ট ও ডায়নামিক লাইভ প্রাইস কার্ড গ্রিড */}
         <section className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl">
-          <div className="mb-3">
-            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono">🎯 Pipeline Active Assets Watchlist</h3>
-            <p className="text-[11px] text-zinc-500">Auto background scanner evaluates signals only within this pool every 60s.</p>
+          <div className="mb-4">
+            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono">🎯 Live Pipeline Monitoring Watchlist</h3>
+            <p className="text-[11px] text-zinc-500">Real-time LTP ticks fetched directly from the broker pipeline.</p>
           </div>
-          <form onSubmit={addSymbolToWatchlist} className="flex gap-2 mb-4">
-            <input type="text" required value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} placeholder="Exchange:Symbol (e.g., NSE:NIFTY26JUL22000CE)" className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white font-mono focus:outline-none"/>
-            <button type="submit" className="px-5 py-2 bg-emerald-500 text-zinc-950 text-xs font-black uppercase rounded hover:bg-emerald-600 transition">Add Asset</button>
+          
+          <form onSubmit={addSymbolToWatchlist} className="flex gap-2 mb-5">
+            <input type="text" required value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} placeholder="Exchange:Symbol (e.g., NSE:NIFTY26JUL22000CE)" className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white font-mono focus:outline-none focus:border-zinc-700"/>
+            <button type="submit" className="px-5 py-2 bg-emerald-500 text-zinc-950 text-xs font-black uppercase rounded hover:bg-emerald-600 transition">Add Instrument</button>
           </form>
-          <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto bg-black p-3 rounded-lg border border-zinc-900">
-            {watchlist.map((sym) => (
-              <span key={sym} className="flex items-center gap-2 bg-zinc-900 px-2.5 py-1 rounded text-[11px] border border-zinc-800 font-mono text-cyan-400">
-                <span>{sym}</span>
-                <button type="button" onClick={() => removeSymbolFromWatchlist(sym)} className="text-zinc-500 hover:text-red-400 font-bold text-xs">×</button>
-              </span>
-            ))}
+          
+          {/* স্টক/ফিউচার রেসপন্সিভ কার্ড গ্রিড */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[400px] overflow-y-auto pr-1">
+            {watchlist.length === 0 ? (
+              <div className="col-span-full text-center py-8 text-zinc-600 border border-dashed border-zinc-800 rounded-xl font-mono text-xs">
+                Pipeline container empty. Add symbols to start tracking live ticks.
+              </div>
+            ) : (
+              watchlist.map((sym) => {
+                const liveData = livePrices[sym] || { price: 0.00, change: 0, direction: 'neutral' };
+                
+                // প্রাইসের ডিরেকশন অনুযায়ী বর্ডার এবং টেক্সট কালার ডিফাইন করা হলো
+                let borderStateColor = 'border-zinc-800';
+                let priceTextColor = 'text-zinc-300';
+                if (liveData.direction === 'up') {
+                  borderStateColor = 'border-emerald-500/40 bg-emerald-950/10';
+                  priceTextColor = 'text-emerald-400';
+                } else if (liveData.direction === 'down') {
+                  borderStateColor = 'border-red-500/40 bg-red-950/10';
+                  priceTextColor = 'text-red-400';
+                }
+
+                return (
+                  <div key={sym} className={`p-4 bg-black border ${borderStateColor} rounded-xl shadow-lg relative flex flex-col justify-between group transition-all duration-300`}>
+                    <button 
+                      type="button" 
+                      onClick={() => removeSymbolFromWatchlist(sym)} 
+                      className="absolute top-2 right-2 text-zinc-600 hover:text-red-400 font-bold text-sm transition opacity-0 group-hover:opacity-100 focus:opacity-100"
+                      title="Remove from pipeline"
+                    >
+                      ✕
+                    </button>
+                    
+                    <div className="mb-2">
+                      <span className="text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-mono uppercase tracking-wider">
+                        {sym.split(':')[0] || 'TICKER'}
+                      </span>
+                      <h4 className="text-xs font-bold font-mono tracking-wide text-zinc-200 mt-1.5 break-all">
+                        {sym.split(':')[1] || sym}
+                      </h4>
+                    </div>
+
+                    <div className="flex items-baseline justify-between mt-2 pt-2 border-t border-zinc-900">
+                      <span className="text-[10px] font-mono text-zinc-500 uppercase">LTP</span>
+                      <div className="text-right">
+                        <span className={`text-base font-black font-mono tracking-tight transition-colors duration-200 ${priceTextColor}`}>
+                          ₹{liveData.price > 0 ? liveData.price.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : "0.00"}
+                        </span>
+                        {liveData.change !== undefined && liveData.change !== 0 && (
+                          <p className={`text-[10px] font-mono font-medium ${liveData.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                            {liveData.change >= 0 ? `+${liveData.change}%` : `${liveData.change}%`}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </section>
 
@@ -462,7 +555,7 @@ export default function AlgoTradingApp() {
               </div>
             )}
 
-            {/* ট্যাব ২: ইন-ডেপথ ব্যাকটেস্টিং ক্যাপিটাল ক্যালকুলেশন উইন্ডো */}
+            {/* ট্যাব ২: ইন-ডেপথ ব্যাকটেস্টিং উইন্ডো */}
             {activeTab === 'backtest' && (
               <div className="space-y-6">
                 <form onSubmit={runStrategyBacktest} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end bg-black/40 p-4 rounded-lg border border-zinc-800/80">
