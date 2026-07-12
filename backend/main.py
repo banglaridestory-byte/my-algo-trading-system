@@ -21,9 +21,16 @@ from fyers_apiv3 import fyersModel
 
 app = FastAPI(title="⚡ APEX QUANT Enterprise Terminal Pro")
 
+# CORS Configuration: Production domain whitelisting
+origins = [
+    "https://algo-trading-frontend-app.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=origins, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,14 +41,17 @@ SYSTEM_SETTINGS = {"fyers_connected": False, "order_placement": "OFF", "auto_sca
 USER_WATCHLIST = ["NSE:RELIANCE-EQ", "NSE:SBIN-EQ"]
 CALL_HISTORY = []  
 CONNECTED_CLIENTS = set()
-TOKEN_FILE = "fyers_token.json"
+TOKEN_FILE = "/tmp/fyers_token.json"  # Render writable partition path
 
 fyers = None  
 CURRENT_CREDENTIALS = {"client_id": "", "secret_key": ""}
 
 def save_token_to_file(data):
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(data, f)
+    try:
+        with open(TOKEN_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Token persistence failed: {e}")
 
 def load_token_from_file():
     if os.path.exists(TOKEN_FILE):
@@ -76,7 +86,6 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     CONNECTED_CLIENTS.add(websocket)
     try:
-        # কানেক্ট হওয়ামাত্রই বর্তমান ওয়াচলিস্টের প্রাইস একবার পুশ করে দেওয়া
         for symbol in USER_WATCHLIST:
             await websocket.send_json({
                 "event": "PRICE_UPDATE",
@@ -96,7 +105,6 @@ async def broadcast_signal(alert_payload: dict):
         targets = [client.send_json(alert_payload) for client in CONNECTED_CLIENTS]
         await asyncio.gather(*targets, return_exceptions=True)
 
-# অটো ব্যাকগ্রাউন্ড স্ক্যানার ও লাইভ প্রাইস পুশার
 async def background_market_scanner_daemon():
     global fyers, CALL_HISTORY
     while True:
@@ -113,7 +121,6 @@ async def background_market_scanner_daemon():
                         except Exception as e:
                             pass
                     
-                    # মার্কেট বন্ধ থাকলে বা ফায়ার্স ডিসকানেক্টেড থাকলে জেনুইন বেস ফলব্যাক প্রাইস
                     if ltp == 0.0:
                         if "RELIANCE" in symbol:
                             ltp = round(float(np.random.uniform(2400, 2500)), 2)
@@ -124,7 +131,6 @@ async def background_market_scanner_daemon():
 
                     mock_change = round(float(np.random.uniform(-1.2, 1.2)), 2)
                     
-                    # ডাটা ব্রডকাস্ট করা হচ্ছে
                     await broadcast_signal({
                         "event": "PRICE_UPDATE",
                         "data": {
@@ -171,8 +177,6 @@ async def background_market_scanner_daemon():
                                         })
             except Exception as e:
                 print(f"Daemon Error: {e}")
-        
-        # দ্রুত রেসপন্সের জন্য লুপ ইন্টারভাল ৩ সেকেন্ড করা হলো
         await asyncio.sleep(3)
 
 @app.on_event("startup")
@@ -193,7 +197,10 @@ async def startup_event():
 
 @app.post("/api/login")
 def login(data: LoginRequest):
-    if data.username == "admin" and data.password == "supersecret123":
+    # Payload Strings ট্রিম করে চেক করা হচ্ছে
+    entered_user = data.username.strip()
+    entered_pass = data.password.strip()
+    if entered_user == "admin" and entered_pass == "supersecret123":
         return {"status": "success", "message": "Authentication Token Issued"}
     raise HTTPException(status_code=401, detail="Invalid Security Credentials!")
 

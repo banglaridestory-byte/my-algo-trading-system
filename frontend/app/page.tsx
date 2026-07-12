@@ -67,7 +67,8 @@ export default function AlgoTradingApp() {
   const [btTimeframe, setBtTimeframe] = useState<string>('5m');
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
+  // Render Production URL assigned as standard fallback node
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -91,6 +92,7 @@ export default function AlgoTradingApp() {
       fetchWatchlist();
       fetchCallHistory();
 
+      // Secure WebSocket mapping engine setup
       const wsUrl = API_BASE.replace("https://", "wss://").replace("http://", "ws://") + "/ws/alerts";
       const ws = new WebSocket(wsUrl);
 
@@ -143,7 +145,7 @@ export default function AlgoTradingApp() {
       const res = await fetch(`${API_BASE}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        body: JSON.stringify({ username: username.trim(), password: password.trim() })
       });
       if (res.ok) setIsLoggedIn(true);
       else setAuthError("Security Authentication Rejected.");
