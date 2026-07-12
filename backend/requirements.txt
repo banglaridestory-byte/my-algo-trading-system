@@ -4,3 +4,5 @@ pydantic
 pandas<2.0.0
 numpy<2.0.0
 fyers-apiv3
+uvicorn[standard]==0.30.1
+websockets==12.0
