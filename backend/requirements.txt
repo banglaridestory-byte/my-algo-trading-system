@@ -3,5 +3,5 @@ uvicorn
 pydantic
 pandas<2.0.0
 numpy<2.0.0
-pandas-ta
 fyers-apiv3
+git+https://github.com/twopirllc/pandas-ta.git@main
