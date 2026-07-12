@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 fyers-apiv3
-pandas
-numpy
-https://github.com/twopirllc/pandas-ta/archive/refs/heads/development.zip
+numpy<2.0.0
+pandas<2.0.0
+pandas-ta
