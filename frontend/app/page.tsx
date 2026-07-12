@@ -27,11 +27,10 @@ interface BacktestResult {
   duration_tested: string;
 }
 
-// লাইভ প্রাইস স্টোর করার ইন্টাফেস
 interface LivePrices {
   [symbol: string]: {
     price: number;
-    change?: number; // শতাংশ বা পয়েন্টে পরিবর্তন (ঐচ্ছিক)
+    change?: number;
     direction?: 'up' | 'down' | 'neutral';
   };
 }
@@ -58,10 +57,7 @@ export default function AlgoTradingApp() {
   const [activeTab, setActiveTab] = useState<string>('live-logs');
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
   
-  // 📈 লাইভ রানিং প্রাইস ট্র্যাকিং স্টেট
   const [livePrices, setLivePrices] = useState<LivePrices>({});
-  
-  // অ্যালার্ট বেল স্টেট ম্যানেজমেন্ট
   const [alertLogs, setAlertLogs] = useState<{ id: number; text: string; type: 'success' | 'error' | 'signal' }[]>([]);
   const [showAlertModal, setShowAlertModal] = useState<boolean>(false);
 
@@ -71,8 +67,7 @@ export default function AlgoTradingApp() {
   const [btTimeframe, setBtTimeframe] = useState<string>('5m');
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
 
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000/api";
-  const WS_BASE = API_BASE.replace("https://", "wss://").replace("http://", "ws://");
+  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000";
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -96,32 +91,35 @@ export default function AlgoTradingApp() {
       fetchWatchlist();
       fetchCallHistory();
 
-      const ws = new WebSocket(`${WS_BASE}/ws/alerts`);
+      const wsUrl = API_BASE.replace("https://", "wss://").replace("http://", "ws://") + "/ws/alerts";
+      const ws = new WebSocket(wsUrl);
+
       ws.onmessage = (event) => {
-        const parseData = JSON.parse(event.data);
-        
-        // ১. অ্যালার্ট বা নতুন সিগন্যাল রিসিভ হ্যান্ডলার
-        if (parseData.event === "NEW_CALL") {
-          pushAlert(parseData.message, 'signal');
-          if (audioRef.current) audioRef.current.play().catch(() => {});
-          setCallHistory(prev => [parseData.data, ...prev]);
-        } else if (parseData.event === "SYSTEM_ERROR") {
-          pushAlert(parseData.message, 'error');
-        }
-        
-        // ২. 🔴 রিয়েল-টাইম প্রাইস আপডেট হ্যান্ডলার (যদি ব্যাকএন্ড থেকে এই ইভেন্টটি পাঠানো হয়)
-        else if (parseData.event === "PRICE_UPDATE") {
-          const { symbol, price, change } = parseData.data;
-          setLivePrices(prev => {
-            const oldPrice = prev[symbol]?.price || price;
-            const direction = price > oldPrice ? 'up' : price < oldPrice ? 'down' : prev[symbol]?.direction || 'neutral';
-            return {
-              ...prev,
-              [symbol]: { price, change, direction }
-            };
-          });
+        try {
+          const parseData = JSON.parse(event.data);
+          
+          if (parseData.event === "NEW_CALL") {
+            pushAlert(parseData.message, 'signal');
+            if (audioRef.current) audioRef.current.play().catch(() => {});
+            setCallHistory(prev => [parseData.data, ...prev]);
+          } else if (parseData.event === "SYSTEM_ERROR") {
+            pushAlert(parseData.message, 'error');
+          } else if (parseData.event === "PRICE_UPDATE") {
+            const { symbol, price, change } = parseData.data;
+            setLivePrices(prev => {
+              const oldPrice = prev[symbol]?.price || price;
+              const direction = price > oldPrice ? 'up' : price < oldPrice ? 'down' : prev[symbol]?.direction || 'neutral';
+              return {
+                ...prev,
+                [symbol]: { price, change, direction }
+              };
+            });
+          }
+        } catch (e) {
+          console.error("WS Parse error", e);
         }
       };
+
       return () => ws.close();
     }
   }, [isLoggedIn]);
@@ -142,7 +140,7 @@ export default function AlgoTradingApp() {
     e.preventDefault();
     setAuthError('');
     try {
-      const res = await fetch(`${API_BASE}/login`, {
+      const res = await fetch(`${API_BASE}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -156,7 +154,7 @@ export default function AlgoTradingApp() {
 
   const fetchSystemSettings = async () => {
     try {
-      const res = await fetch(`${API_BASE}/settings`);
+      const res = await fetch(`${API_BASE}/api/settings`);
       if (res.ok) {
         const data = await res.json();
         setFyersConnected(data.fyers_connected);
@@ -169,12 +167,10 @@ export default function AlgoTradingApp() {
 
   const fetchWatchlist = async () => {
     try {
-      const res = await fetch(`${API_BASE}/watchlist`);
+      const res = await fetch(`${API_BASE}/api/watchlist`);
       if (res.ok) {
         const data = await res.json();
         setWatchlist(data.watchlist || []);
-        
-        // প্রারম্ভিক ডামি বা বেস প্রাইস সেটআপ (যতক্ষণ না WS ডাটা আসছে)
         const initialPrices: LivePrices = {};
         (data.watchlist || []).forEach((sym: string) => {
           initialPrices[sym] = { price: 0.00, change: 0, direction: 'neutral' };
@@ -186,7 +182,7 @@ export default function AlgoTradingApp() {
 
   const fetchCallHistory = async () => {
     try {
-      const res = await fetch(`${API_BASE}/calls/history`);
+      const res = await fetch(`${API_BASE}/api/calls/history`);
       if (res.ok) {
         const data = await res.json();
         setCallHistory(data.history || []);
@@ -199,7 +195,7 @@ export default function AlgoTradingApp() {
     const cleanSymbol = newSymbol.trim().toUpperCase();
     if (!cleanSymbol) return;
     try {
-      const res = await fetch(`${API_BASE}/watchlist/add`, {
+      const res = await fetch(`${API_BASE}/api/watchlist/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol: cleanSymbol })
@@ -213,12 +209,12 @@ export default function AlgoTradingApp() {
       } else {
         pushAlert(data.detail, 'error');
       }
-    } catch (err) { pushAlert("Pipeline pipeline sync fault.", 'error'); }
+    } catch (err) { pushAlert("Pipeline sync fault.", 'error'); }
   };
 
   const removeSymbolFromWatchlist = async (symbol: string) => {
     try {
-      const res = await fetch(`${API_BASE}/watchlist/remove`, {
+      const res = await fetch(`${API_BASE}/api/watchlist/remove`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol })
@@ -244,7 +240,7 @@ export default function AlgoTradingApp() {
   const submitAuthCode = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const targetUrl = `${API_BASE}/fyers-callback?auth_code=${encodeURIComponent(manualAuthCode.trim())}&client_id=${encodeURIComponent(clientId)}&secret_key=${encodeURIComponent(secretKey)}&redirect_url=${encodeURIComponent(redirectUrl)}`;
+      const targetUrl = `${API_BASE}/api/fyers-callback?auth_code=${encodeURIComponent(manualAuthCode.trim())}&client_id=${encodeURIComponent(clientId)}&secret_key=${encodeURIComponent(secretKey)}&redirect_url=${encodeURIComponent(redirectUrl)}`;
       const res = await fetch(targetUrl);
       if (res.ok) {
         setFyersConnected(true);
@@ -259,7 +255,7 @@ export default function AlgoTradingApp() {
 
   const updateEngineConfig = async (status: string, tf: string) => {
     try {
-      const res = await fetch(`${API_BASE}/settings/toggle-order`, {
+      const res = await fetch(`${API_BASE}/api/settings/toggle-order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order_placement: status, timeframe: tf })
@@ -274,7 +270,7 @@ export default function AlgoTradingApp() {
 
   const toggleAutoScan = async (status: string) => {
     try {
-      const res = await fetch(`${API_BASE}/settings/toggle-autoscan`, {
+      const res = await fetch(`${API_BASE}/api/settings/toggle-autoscan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ auto_scan: status })
@@ -289,7 +285,7 @@ export default function AlgoTradingApp() {
   const runStrategyBacktest = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_BASE}/backtest`, {
+      const res = await fetch(`${API_BASE}/api/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol: btSymbol, strategy: btStrategy, duration_months: btDuration, timeframe: btTimeframe })
@@ -324,11 +320,9 @@ export default function AlgoTradingApp() {
 
   return (
     <div className="min-h-screen bg-[#09090b] text-zinc-100 font-sans antialiased">
-      
-      {/* 🔔 সেন্ট্রালাইজড অ্যালার্ট নোটিফিকেশন মডাল */}
       {showAlertModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end p-4">
-          <div className="w-full max-w-md bg-[#18181b] border border-zinc-800 rounded-xl p-6 shadow-2xl flex flex-col h-full animate-slide-in">
+          <div className="w-full max-w-md bg-[#18181b] border border-zinc-800 rounded-xl p-6 shadow-2xl flex flex-col h-full">
             <div className="flex justify-between items-center mb-4 border-b border-zinc-800 pb-3">
               <h3 className="font-bold text-sm tracking-wider flex items-center gap-2">🔔 NOTIFICATION TERMINAL ({alertLogs.length})</h3>
               <button onClick={() => setShowAlertModal(false)} className="text-zinc-500 hover:text-white text-sm">✕ Close</button>
@@ -348,7 +342,6 @@ export default function AlgoTradingApp() {
         </div>
       )}
 
-      {/* রেসপন্সিভ হেডার */}
       <header className="border-b border-zinc-800 bg-[#121214] px-4 py-3 sticky top-0 z-40 flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-black tracking-wider text-emerald-400">⚡ APEX_QUANT MULTI-STREAM</span>
@@ -357,12 +350,11 @@ export default function AlgoTradingApp() {
           </span>
         </div>
         
-        {/* রাইট সাইড কন্ট্রোল বাটন ও অ্যালার্ট বেল */}
         <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
           <button onClick={() => setShowAlertModal(true)} className="relative p-2 bg-zinc-900 border border-zinc-800 rounded-lg hover:bg-zinc-800 transition">
             <span className="text-base">🔔</span>
             {alertLogs.length > 0 && (
-              <span className="absolute -top-1 -right-1 bg-amber-500 text-zinc-950 text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
+              <span className="absolute -top-1 -right-1 bg-amber-500 text-zinc-950 text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">
                 {alertLogs.length}
               </span>
             )}
@@ -372,11 +364,7 @@ export default function AlgoTradingApp() {
       </header>
 
       <main className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
-        
-        {/* গ্রিড প্যানেল ১: ক্রেডেনশিয়াল ও অপারেশন কন্ট্রোল */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          
-          {/* Fyers Developer Vault */}
           <div className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl lg:col-span-2">
             <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono mb-3">🔑 Fyers Persistent Vault</h3>
             <form onSubmit={saveDeveloperConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -399,7 +387,6 @@ export default function AlgoTradingApp() {
             </form>
           </div>
 
-          {/* অটো স্ক্যানিং কন্ট্রোল রুলস */}
           <div className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl flex flex-col justify-between">
             <div>
               <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono mb-2">⚙️ Operational Control Engine</h3>
@@ -427,7 +414,6 @@ export default function AlgoTradingApp() {
           </div>
         </section>
 
-        {/* 💳 ওয়াচলিস্ট ও ডায়নামিক লাইভ প্রাইস কার্ড গ্রিড */}
         <section className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl">
           <div className="mb-4">
             <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono">🎯 Live Pipeline Monitoring Watchlist</h3>
@@ -435,11 +421,10 @@ export default function AlgoTradingApp() {
           </div>
           
           <form onSubmit={addSymbolToWatchlist} className="flex gap-2 mb-5">
-            <input type="text" required value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} placeholder="Exchange:Symbol (e.g., NSE:NIFTY26JUL22000CE)" className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white font-mono focus:outline-none focus:border-zinc-700"/>
+            <input type="text" required value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} placeholder="Exchange:Symbol (e.g., NSE:RELIANCE-EQ)" className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white font-mono focus:outline-none focus:border-zinc-700"/>
             <button type="submit" className="px-5 py-2 bg-emerald-500 text-zinc-950 text-xs font-black uppercase rounded hover:bg-emerald-600 transition">Add Instrument</button>
           </form>
           
-          {/* স্টক/ফিউচার রেসপন্সিভ কার্ড গ্রিড */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[400px] overflow-y-auto pr-1">
             {watchlist.length === 0 ? (
               <div className="col-span-full text-center py-8 text-zinc-600 border border-dashed border-zinc-800 rounded-xl font-mono text-xs">
@@ -448,10 +433,9 @@ export default function AlgoTradingApp() {
             ) : (
               watchlist.map((sym) => {
                 const liveData = livePrices[sym] || { price: 0.00, change: 0, direction: 'neutral' };
-                
-                // প্রাইসের ডিরেকশন অনুযায়ী বর্ডার এবং টেক্সট কালার ডিফাইন করা হলো
                 let borderStateColor = 'border-zinc-800';
                 let priceTextColor = 'text-zinc-300';
+                
                 if (liveData.direction === 'up') {
                   borderStateColor = 'border-emerald-500/40 bg-emerald-950/10';
                   priceTextColor = 'text-emerald-400';
@@ -466,7 +450,6 @@ export default function AlgoTradingApp() {
                       type="button" 
                       onClick={() => removeSymbolFromWatchlist(sym)} 
                       className="absolute top-2 right-2 text-zinc-600 hover:text-red-400 font-bold text-sm transition opacity-0 group-hover:opacity-100 focus:opacity-100"
-                      title="Remove from pipeline"
                     >
                       ✕
                     </button>
@@ -484,7 +467,7 @@ export default function AlgoTradingApp() {
                       <span className="text-[10px] font-mono text-zinc-500 uppercase">LTP</span>
                       <div className="text-right">
                         <span className={`text-base font-black font-mono tracking-tight transition-colors duration-200 ${priceTextColor}`}>
-                          ₹{liveData.price > 0 ? liveData.price.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : "0.00"}
+                          ₹{liveData.price > 0 ? liveData.price.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : "Calculating..."}
                         </span>
                         {liveData.change !== undefined && liveData.change !== 0 && (
                           <p className={`text-[10px] font-mono font-medium ${liveData.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
@@ -500,7 +483,6 @@ export default function AlgoTradingApp() {
           </div>
         </section>
 
-        {/* ট্যাব সিস্টেম: সিগন্যাল হিস্ট্রি এবং ব্যাকটেস্টিং */}
         <section className="bg-[#18181b] border border-zinc-800 rounded-xl shadow-xl overflow-hidden">
           <div className="flex border-b border-zinc-800 bg-black/40">
             <button onClick={() => setActiveTab('live-logs')} className={`flex-1 sm:flex-none px-6 py-3 text-xs font-bold font-mono tracking-wider transition-all ${activeTab === 'live-logs' ? 'border-b-2 border-emerald-400 bg-zinc-900 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>
@@ -512,7 +494,6 @@ export default function AlgoTradingApp() {
           </div>
 
           <div className="p-4">
-            {/* ট্যাব ১: সিগন্যাল ট্র্যাকিং ও হিস্ট্রি */}
             {activeTab === 'live-logs' && (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs font-mono">
@@ -555,7 +536,6 @@ export default function AlgoTradingApp() {
               </div>
             )}
 
-            {/* ট্যাব ২: ইন-ডেপথ ব্যাকটেস্টিং উইন্ডো */}
             {activeTab === 'backtest' && (
               <div className="space-y-6">
                 <form onSubmit={runStrategyBacktest} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end bg-black/40 p-4 rounded-lg border border-zinc-800/80">
@@ -595,7 +575,6 @@ export default function AlgoTradingApp() {
                   <button type="submit" className="w-full py-2 bg-blue-600 hover:bg-blue-700 font-bold rounded text-xs text-white uppercase font-mono transition">Compute Backplane</button>
                 </form>
 
-                {/* ব্যাকটেস্টের ডিটেইলড এনালিটিক্স কার্ডস */}
                 {backtestResult && (
                   <div className="space-y-4 font-mono">
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
