@@ -450,11 +450,15 @@ export default function AlgoTradingApp() {
                       <div className="text-right flex items-center gap-3">
                         <div>
                           <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
-                            ₹{data.price.toFixed(2)}
-                          </p>
-                          <p className={`text-[9px] font-mono ${data.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                            {data.change >= 0 ? '+' : ''}{data.change}%
-                          </p>
+                           <div>
+  <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
+    ₹{data.price.toFixed(2)}
+  </p>
+  {/* ✅ Safely handle optional change property with Nullish Coalescing Operator */}
+  <p className={`text-[9px] font-mono ${(data.change ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+    {(data.change ?? 0) >= 0 ? '+' : ''}{(data.change ?? 0)}%
+  </p>
+</div>
                         </div>
                         <button onClick={() => removeSymbolFromWatchlist(symbol)} className="text-zinc-600 hover:text-red-400 text-xs transition-all font-mono">×</button>
                       </div>
