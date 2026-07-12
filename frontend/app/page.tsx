@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
+import dynamic from 'next/dynamic';
 
 interface CallLog {
   id: number;
@@ -27,6 +28,12 @@ interface BacktestResult {
   duration_tested: string;
 }
 
+// Render/Next.js প্রোডাকশন বিল্ডে SSR ক্র্যাশ আটকাতে TradingView চার্টকে ডাইনামিকালি লোড করা হলো
+const TradingViewChart = dynamic(
+  () => import('./components/TradingViewChart').then((mod) => mod.TradingViewChart),
+  { ssr: false }
+);
+
 export default function AlgoTradingApp() {
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [username, setUsername] = useState<string>('');
@@ -48,6 +55,9 @@ export default function AlgoTradingApp() {
   const [newSymbol, setNewSymbol] = useState<string>('');
   const [activeTab, setActiveTab] = useState<string>('live-logs');
   const [callHistory, setCallHistory] = useState<CallLog[]>([]);
+  
+  // চার্টে কোন সিম্বলটি সিলেক্টেড থাকবে তার স্টেট (ডিফল্ট প্রথমটি হবে)
+  const [selectedChartSymbol, setSelectedChartSymbol] = useState<string>('');
   
   // অ্যালার্ট বেল স্টেট ম্যানেজমেন্ট
   const [alertLogs, setAlertLogs] = useState<{ id: number; text: string; type: 'success' | 'error' | 'signal' }[]>([]);
@@ -98,6 +108,13 @@ export default function AlgoTradingApp() {
       return () => ws.close();
     }
   }, [isLoggedIn]);
+
+  // ওয়াচলিস্ট লোড হলে প্রথম সিম্বলটিকে চার্টের জন্য ডিফল্ট সেট করার জন্য এফেক্ট
+  useEffect(() => {
+    if (watchlist.length > 0 && !selectedChartSymbol) {
+      setSelectedChartSymbol(watchlist[0]);
+    }
+  }, [watchlist]);
 
   const pushAlert = (text: string, type: 'success' | 'error' | 'signal') => {
     setAlertLogs(prev => [{ id: Date.now(), text, type }, ...prev]);
@@ -173,6 +190,7 @@ export default function AlgoTradingApp() {
       const data = await res.json();
       if (res.ok) {
         setWatchlist(data.watchlist);
+        if (!selectedChartSymbol) setSelectedChartSymbol(cleanSymbol);
         setNewSymbol('');
         pushAlert(`${cleanSymbol} locked into pipeline.`, 'success');
       } else {
@@ -191,6 +209,9 @@ export default function AlgoTradingApp() {
       const data = await res.json();
       if (res.ok) {
         setWatchlist(data.watchlist);
+        if (selectedChartSymbol === symbol) {
+          setSelectedChartSymbol(data.watchlist[0] || '');
+        }
         pushAlert(`${symbol} purged from stream.`, 'success');
       }
     } catch (err) { console.error(err); }
@@ -387,11 +408,18 @@ export default function AlgoTradingApp() {
           </div>
         </section>
 
+        {/* TradingView Live Matrix চার্ট সেকশন */}
+        {selectedChartSymbol && (
+          <section className="w-full">
+            <TradingViewChart activeSymbol={selectedChartSymbol} calls={callHistory} />
+          </section>
+        )}
+
         {/* ওয়াচলিস্ট ও সিম্বল সার্চ এডার */}
         <section className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl">
           <div className="mb-3">
             <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono">🎯 Pipeline Active Assets Watchlist</h3>
-            <p className="text-[11px] text-zinc-500">Auto background scanner evaluates signals only within this pool every 60s.</p>
+            <p className="text-[11px] text-zinc-500">Auto background scanner evaluates signals only within this pool every 60s. Click a token to stream chart.</p>
           </div>
           <form onSubmit={addSymbolToWatchlist} className="flex gap-2 mb-4">
             <input type="text" required value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} placeholder="Exchange:Symbol (e.g., NSE:NIFTY26JUL22000CE)" className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white font-mono focus:outline-none"/>
@@ -399,9 +427,22 @@ export default function AlgoTradingApp() {
           </form>
           <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto bg-black p-3 rounded-lg border border-zinc-900">
             {watchlist.map((sym) => (
-              <span key={sym} className="flex items-center gap-2 bg-zinc-900 px-2.5 py-1 rounded text-[11px] border border-zinc-800 font-mono text-cyan-400">
+              <span 
+                key={sym} 
+                onClick={() => setSelectedChartSymbol(sym)}
+                className={`flex items-center gap-2 px-2.5 py-1 rounded text-[11px] border font-mono cursor-pointer transition ${selectedChartSymbol === sym ? 'bg-cyan-950/60 border-cyan-500 text-cyan-400 font-bold' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:border-zinc-700'}`}
+              >
                 <span>{sym}</span>
-                <button type="button" onClick={() => removeSymbolFromWatchlist(sym)} className="text-zinc-500 hover:text-red-400 font-bold text-xs">×</button>
+                <button 
+                  type="button" 
+                  onClick={(e) => {
+                    e.stopPropagation(); // চার্ট সিলেকশন ট্রিগার হওয়া আটকানোর জন্য
+                    removeSymbolFromWatchlist(sym);
+                  }} 
+                  className="text-zinc-500 hover:text-red-400 font-bold text-xs ml-1"
+                >
+                  ×
+                </button>
               </span>
             ))}
           </div>
