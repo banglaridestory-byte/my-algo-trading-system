@@ -2,8 +2,5 @@ fastapi
 uvicorn
 fyers-apiv3
 pandas
-pandas-ta
-python-jose[cryptography]
-passlib[bcrypt]
-pydantic
 numpy
+https://github.com/twopirllc/pandas-ta/archive/refs/heads/development.zip
