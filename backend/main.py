@@ -86,11 +86,11 @@ async def broadcast_signal(alert_payload: dict):
     if CONNECTED_CLIENTS:
         await asyncio.gather(*[client.send_json(alert_payload) for client in CONNECTED_CLIENTS])
 
-# অটো ব্যাকগ্রাউন্ড স্ক্যানার (প্রতি ৬০ সেকেন্ডে রান হবে)
+# অটো ব্যাকগ্রাউন্ড স্ক্যানার ও লাইভ প্রাইস পুশার
 async def background_market_scanner_daemon():
     global fyers, CALL_HISTORY
     while True:
-        if SYSTEM_SETTINGS["auto_scan"] == "ON" and len(USER_WATCHLIST) > 0:
+        if len(USER_WATCHLIST) > 0:
             try:
                 current_tf = SYSTEM_SETTINGS["timeframe"]
                 for symbol in USER_WATCHLIST:
@@ -106,55 +106,66 @@ async def background_market_scanner_daemon():
                     if ltp == 0.0:
                         ltp = round(float(np.random.uniform(500, 3000)), 2)
 
-                    # ডামি মোমেন্টাম বা রিয়েল ক্যান্ডেল জেনারেটর
-                    prices = [ltp + np.random.uniform(-5, 5) for _ in range(50)]
-                    df = pd.DataFrame({"close": prices, "high": [p + 2 for p in prices], "low": [p - 2 for p in prices], "open": prices, "volume": [5000]*50})
-                    
-                    if hasattr(strategies, "run_scanner_strategies"):
-                        signals = strategies.run_scanner_strategies(df, current_tf)
-                        for strat, triggered in signals.items():
-                            if triggered:
-                                is_duplicate = any(c["symbol"] == symbol and c["strategy"] == strat and c["timeframe"] == current_tf for c in CALL_HISTORY[:3])
-                                if not is_duplicate:
-                                    # প্রিসাইজ এন্ট্রি, টার্গেট, স্টপলস ক্যালকুলেশন
-                                    entry = ltp
-                                    sl = round(entry * 0.99, 2)       # 1% SL
-                                    target = round(entry * 1.02, 2)   # 2% Target (1:2 Risk Reward)
-                                    
-                                    # সিমুলেটেড স্টেট ফিনিশ
-                                    status = np.random.choice(["TARGET HIT", "SL HIT", "ACTIVE"], p=[0.5, 0.3, 0.2])
-                                    pnl = round(float(np.random.uniform(1500, 5000) if status == "TARGET HIT" else np.random.uniform(-2000, -1000) if status == "SL HIT" else 0), 2)
+                    # 🔴 লাইভ প্রাইস কার্ড আপডেটের জন্য প্রতি ১০ সেকেন্ডে (বা লুপে) WebSocket পুশ করা হচ্ছে
+                    mock_change = round(float(np.random.uniform(-2.5, 2.5)), 2)
+                    await broadcast_signal({
+                        "event": "PRICE_UPDATE",
+                        "data": {
+                            "symbol": symbol,
+                            "price": ltp,
+                            "change": mock_change
+                        }
+                    })
 
-                                    new_signal = {
-                                        "id": len(CALL_HISTORY) + 1,
-                                        "timestamp": datetime.now().strftime("%H:%M:%S"),
-                                        "symbol": symbol,
-                                        "strategy": strat,
-                                        "timeframe": current_tf,
-                                        "type": "BUY CALL",
-                                        "entry_price": entry,
-                                        "sl": sl,
-                                        "target": target,
-                                        "pnl": pnl,
-                                        "status": status
-                                    }
-                                    CALL_HISTORY.insert(0, new_signal)
-                                    
-                                    await broadcast_signal({
-                                        "event": "NEW_CALL",
-                                        "message": f"🚨 SIGNAL: {strat} ({current_tf}) triggered for {symbol} at ₹{entry}",
-                                        "data": new_signal
-                                    })
+                    # স্ট্র্যাটেজি ও সিগন্যাল ডিটেকশন লুপ
+                    if SYSTEM_SETTINGS["auto_scan"] == "ON":
+                        prices = [ltp + np.random.uniform(-5, 5) for _ in range(50)]
+                        df = pd.DataFrame({"close": prices, "high": [p + 2 for p in prices], "low": [p - 2 for p in prices], "open": prices, "volume": [5000]*50})
+                        
+                        if hasattr(strategies, "run_scanner_strategies"):
+                            signals = strategies.run_scanner_strategies(df, current_tf)
+                            for strat, triggered in signals.items():
+                                if triggered:
+                                    is_duplicate = any(c["symbol"] == symbol and c["strategy"] == strat and c["timeframe"] == current_tf for c in CALL_HISTORY[:3])
+                                    if not is_duplicate:
+                                        entry = ltp
+                                        sl = round(entry * 0.99, 2)       
+                                        target = round(entry * 1.02, 2)   
+                                        
+                                        status = np.random.choice(["TARGET HIT", "SL HIT", "ACTIVE"], p=[0.5, 0.3, 0.2])
+                                        pnl = round(float(np.random.uniform(1500, 5000) if status == "TARGET HIT" else np.random.uniform(-2000, -1000) if status == "SL HIT" else 0), 2)
+
+                                        new_signal = {
+                                            "id": len(CALL_HISTORY) + 1,
+                                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                                            "symbol": symbol,
+                                            "strategy": strat,
+                                            "timeframe": current_tf,
+                                            "type": "BUY CALL",
+                                            "entry_price": entry,
+                                            "sl": sl,
+                                            "target": target,
+                                            "pnl": pnl,
+                                            "status": status
+                                        }
+                                        CALL_HISTORY.insert(0, new_signal)
+                                        
+                                        await broadcast_signal({
+                                            "event": "NEW_CALL",
+                                            "message": f"🚨 SIGNAL: {strat} ({current_tf}) triggered for {symbol} at ₹{entry}",
+                                            "data": new_signal
+                                        })
             except Exception as e:
                 print(f"Daemon Error: {e}")
-        await asyncio.sleep(60)
+        
+        # কার্ডে লাইভ প্রাইসের ফাস্ট রেসপন্স পাওয়ার জন্য স্লিপ টাইম কমিয়ে ১০ সেকেন্ড করা হলো
+        await asyncio.sleep(10)
 
 @app.on_event("startup")
 async def startup_event():
     global fyers, CURRENT_CREDENTIALS
     asyncio.create_task(background_market_scanner_daemon())
     
-    # অটোমেটিক সেশন রিকভারি স্টার্টআপে
     saved_session = load_token_from_file()
     if saved_session:
         expiry_date = datetime.strptime(saved_session["expiry"], "%Y-%m-%d")
@@ -234,7 +245,6 @@ def fyers_callback(auth_code: str, client_id: str, secret_key: str, redirect_url
         access_token = response["access_token"]
         fyers = fyersModel.FyersModel(client_id=client_id.strip(), token=access_token, log_path="/tmp")
         
-        # ১ দিনের জন্য টোকেন সেভ রাখা হচ্ছে 
         expiry_time = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         save_token_to_file({
             "access_token": access_token,
@@ -251,7 +261,6 @@ def fyers_callback(auth_code: str, client_id: str, secret_key: str, redirect_url
 
 @app.post("/api/backtest")
 def run_backtest(data: BacktestRequest):
-    # রিকোয়েস্টেড টাইমফ্রেম এবং ডুরেশনের উপর বেস করে ডিপ কোয়ান্ট ক্যালকুলেশন
     base_trades = 35 * data.duration_months
     won_trades = int(base_trades * np.random.uniform(0.60, 0.75))
     lost_trades = base_trades - won_trades
