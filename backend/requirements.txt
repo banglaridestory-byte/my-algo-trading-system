@@ -3,4 +3,3 @@ uvicorn
 fyers-apiv3
 numpy<2.0.0
 pandas<2.0.0
-pandas-ta
