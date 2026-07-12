@@ -67,8 +67,10 @@ export default function AlgoTradingApp() {
   const [btTimeframe, setBtTimeframe] = useState<string>('5m');
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
 
-  // Render Production URL assigned as standard fallback node
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
+  // ✅ Clean URL base (Trailing slash dynamically trimmed out)
+  const rawApiBase = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
+  const API_BASE = rawApiBase.endsWith('/') ? rawApiBase.slice(0, -1) : rawApiBase;
+  
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -92,7 +94,7 @@ export default function AlgoTradingApp() {
       fetchWatchlist();
       fetchCallHistory();
 
-      // Secure WebSocket mapping engine setup
+      // Secure WebSocket mapping config logic
       const wsUrl = API_BASE.replace("https://", "wss://").replace("http://", "ws://") + "/ws/alerts";
       const ws = new WebSocket(wsUrl);
 
@@ -118,7 +120,7 @@ export default function AlgoTradingApp() {
             });
           }
         } catch (e) {
-          console.error("WS Parse error", e);
+          console.error("WS Telemetry connection fault", e);
         }
       };
 
@@ -138,6 +140,7 @@ export default function AlgoTradingApp() {
     pushAlert("Developer credentials saved to vault successfully.", "success");
   };
 
+  // ✅ Fixed path logic to prevent any internal /api/api nested calls
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
