@@ -70,12 +70,8 @@ export default function AlgoTradingApp() {
   const getSanitizedBase = () => {
     let base = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
     base = base.trim();
-    if (base.endsWith('/')) {
-      base = base.slice(0, -1);
-    }
-    if (base.endsWith('/api')) {
-      base = base.slice(0, -4);
-    }
+    if (base.endsWith('/')) base = base.slice(0, -1);
+    if (base.endsWith('/api')) base = base.slice(0, -4);
     return base;
   };
 
@@ -272,6 +268,7 @@ export default function AlgoTradingApp() {
         setFyersConnected(true);
         setManualAuthCode('');
         pushAlert("Fyers execution channel validation passed successfully!", "success");
+        fetchSystemSettings(); // রিফ্রেশ স্টেট
       } else {
         pushAlert(data.detail || "Handshake rejected.", "error");
       }
@@ -422,7 +419,7 @@ export default function AlgoTradingApp() {
           <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
             <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider font-mono">Dynamic Portfolio Monitor</h3>
             <form onSubmit={addSymbolToWatchlist} className="flex gap-2">
-              <input type="text" placeholder="e.g. NSE:NIFTY26JUL22000CE" value={newSymbol} onChange={e => setNewSymbol(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500 uppercase" />
+              <input type="text" placeholder="e.g. NSE:SBIN-EQ" value={newSymbol} onChange={e => setNewSymbol(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500 uppercase" />
               <button type="submit" className="bg-zinc-800 hover:bg-zinc-700 text-xs font-mono px-3 py-2 rounded-lg font-bold transition-all">+</button>
             </form>
 
