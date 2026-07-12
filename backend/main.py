@@ -17,8 +17,8 @@ except ImportError:
         def run_scanner_strategies(self, df, tf): return {"EMA_Crossover_9_21": False}
     strategies = DummyStrategies()
 
-from fyers_apiv3 import fyersModel
-from fyers_apiv3.fyersWebService import data_ws
+# আগের ওই দুটি লাইন মুছে দিয়ে এই একটি লাইন লিখুন
+from fyers_apiv3 import fyersModel, data_ws
 
 app = FastAPI(title="⚡ APEX QUANT Enterprise Terminal Pro")
 
