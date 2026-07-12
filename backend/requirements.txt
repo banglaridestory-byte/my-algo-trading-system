@@ -4,4 +4,3 @@ pydantic
 pandas<2.0.0
 numpy<2.0.0
 fyers-apiv3
-https://github.com/twopirllc/pandas-ta/archive/refs/heads/main.zip
