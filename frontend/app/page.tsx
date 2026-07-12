@@ -67,10 +67,22 @@ export default function AlgoTradingApp() {
   const [btTimeframe, setBtTimeframe] = useState<string>('5m');
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
 
-  // ✅ Clean URL base (Trailing slash dynamically trimmed out)
-  const rawApiBase = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
-  const API_BASE = rawApiBase.endsWith('/') ? rawApiBase.slice(0, -1) : rawApiBase;
-  
+  // ✅ Absolute Trailing and Intersected Slash Sanitization to eradicate any "/api/api/" issue
+  const getSanitizedBase = () => {
+    let base = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
+    base = base.trim();
+    if (base.endsWith('/')) {
+      base = base.slice(0, -1);
+    }
+    if (base.endsWith('/api')) {
+      base = base.slice(0, -4);
+    }
+    return base;
+  };
+
+  const BASE_HOST = getSanitizedBase(); 
+  const API_BASE = `${BASE_HOST}/api`;
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -94,8 +106,7 @@ export default function AlgoTradingApp() {
       fetchWatchlist();
       fetchCallHistory();
 
-      // Secure WebSocket mapping config logic
-      const wsUrl = API_BASE.replace("https://", "wss://").replace("http://", "ws://") + "/ws/alerts";
+      const wsUrl = BASE_HOST.replace("https://", "wss://").replace("http://", "ws://") + "/ws/alerts";
       const ws = new WebSocket(wsUrl);
 
       ws.onmessage = (event) => {
@@ -140,12 +151,12 @@ export default function AlgoTradingApp() {
     pushAlert("Developer credentials saved to vault successfully.", "success");
   };
 
-  // ✅ Fixed path logic to prevent any internal /api/api nested calls
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
     try {
-      const res = await fetch(`${API_BASE}/api/login`, {
+      // ✅ Explicit cleanly formed POST network link mapping loop
+      const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password: password.trim() })
@@ -159,7 +170,7 @@ export default function AlgoTradingApp() {
 
   const fetchSystemSettings = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/settings`);
+      const res = await fetch(`${API_BASE}/settings`);
       if (res.ok) {
         const data = await res.json();
         setFyersConnected(data.fyers_connected);
@@ -172,7 +183,7 @@ export default function AlgoTradingApp() {
 
   const fetchWatchlist = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist`);
+      const res = await fetch(`${API_BASE}/watchlist`);
       if (res.ok) {
         const data = await res.json();
         setWatchlist(data.watchlist || []);
@@ -187,7 +198,7 @@ export default function AlgoTradingApp() {
 
   const fetchCallHistory = async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/calls/history`);
+      const res = await fetch(`${API_BASE}/calls/history`);
       if (res.ok) {
         const data = await res.json();
         setCallHistory(data.history || []);
@@ -200,7 +211,7 @@ export default function AlgoTradingApp() {
     const cleanSymbol = newSymbol.trim().toUpperCase();
     if (!cleanSymbol) return;
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/add`, {
+      const res = await fetch(`${API_BASE}/watchlist/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol: cleanSymbol })
@@ -219,7 +230,7 @@ export default function AlgoTradingApp() {
 
   const removeSymbolFromWatchlist = async (symbol: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/watchlist/remove`, {
+      const res = await fetch(`${API_BASE}/watchlist/remove`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol })
@@ -227,96 +238,116 @@ export default function AlgoTradingApp() {
       const data = await res.json();
       if (res.ok) {
         setWatchlist(data.watchlist);
-        setLivePrices(prev => {
-          const updated = { ...prev };
-          delete updated[symbol];
-          return updated;
-        });
-        pushAlert(`${symbol} purged from stream.`, 'success');
+        pushAlert(`${symbol} cleared from monitoring stack.`, 'success');
       }
-    } catch (err) { console.error(err); }
+    } catch (e) { pushAlert("Failed to clean tracking target.", 'error'); }
   };
 
-  const launchFyersAuthFlow = () => {
-    const authUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUrl)}&response_type=code&state=apex_sequence`;
-    window.open(authUrl, "_blank");
-  };
-
-  const submitAuthCode = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const triggerFyersAuthAuthChannel = async () => {
+    if (!clientId || !secretKey) return pushAlert("Developer configuration array empty!", "error");
     try {
-      const targetUrl = `${API_BASE}/api/fyers-callback?auth_code=${encodeURIComponent(manualAuthCode.trim())}&client_id=${encodeURIComponent(clientId)}&secret_key=${encodeURIComponent(secretKey)}&redirect_url=${encodeURIComponent(redirectUrl)}`;
-      const res = await fetch(targetUrl);
+      const res = await fetch(`${API_BASE}/fyers/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId.trim(), secret_key: secretKey.trim(), redirect_url: redirectUrl })
+      });
+      const data = await res.json();
+      if (res.ok && data.auth_url) {
+        window.open(data.auth_url, '_blank');
+        pushAlert("Fyers authorization bridge triggered. Check popup.", "success");
+      } else {
+        pushAlert(data.detail || "Link compilation engine broken.", "error");
+      }
+    } catch { pushAlert("Security authorization handshake failure.", "error"); }
+  };
+
+  const processAppCodeRegistrationToken = async () => {
+    if (!manualAuthCode.trim()) return pushAlert("Authentication String core empty", "error");
+    try {
+      const res = await fetch(`${API_BASE}/fyers/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auth_code: manualAuthCode.trim(), client_id: clientId.trim(), secret_key: secretKey.trim() })
+      });
+      const data = await res.json();
       if (res.ok) {
         setFyersConnected(true);
         setManualAuthCode('');
-        pushAlert("Fyers Token Handshake Stable!", "success");
-        fetchSystemSettings();
+        pushAlert("Fyers execution channel validation passed successfully!", "success");
       } else {
-        pushAlert("Token rejected by Broker.", "error");
+        pushAlert(data.detail || "Handshake rejected.", "error");
       }
-    } catch (err) { pushAlert("Fatal connection crash.", "error"); }
+    } catch { pushAlert("Network logic engine timeout.", "error"); }
   };
 
-  const updateEngineConfig = async (status: string, tf: string) => {
+  const handleUpdateExecutionSettings = async (selectedOrderPlacement: string, selectedTimeframe: string) => {
     try {
-      const res = await fetch(`${API_BASE}/api/settings/toggle-order`, {
+      const res = await fetch(`${API_BASE}/settings/update`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_placement: status, timeframe: tf })
+        body: JSON.stringify({ order_placement: selectedOrderPlacement, timeframe: selectedTimeframe })
       });
       if (res.ok) {
-        setOrderPlacement(status);
-        setTimeframe(tf);
-        pushAlert("Router rules synced with backend.", 'success');
+        setOrderPlacement(selectedOrderPlacement);
+        setTimeframe(selectedTimeframe);
+        pushAlert(`System runtime reconfigured [Mode: ${selectedOrderPlacement} | Frame: ${selectedTimeframe}]`, 'success');
       }
-    } catch (e) { console.error(e); }
+    } catch { pushAlert("Config push failure.", "error"); }
   };
 
-  const toggleAutoScan = async (status: string) => {
+  const toggleAutoScanPipeline = async () => {
+    const targets = autoScanStatus === 'ON' ? 'OFF' : 'ON';
     try {
-      const res = await fetch(`${API_BASE}/api/settings/toggle-autoscan`, {
+      const res = await fetch(`${API_BASE}/settings/autoscan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auto_scan: status })
+        body: JSON.stringify({ auto_scan: targets })
       });
       if (res.ok) {
-        setAutoScanStatus(status);
-        pushAlert(`Background loop turned ${status}`, 'success');
+        setAutoScanStatus(targets);
+        pushAlert(`Deep Strategy Engine: ${targets}`, 'success');
       }
-    } catch (e) { console.error(e); }
+    } catch { pushAlert("Pipeline controller lock dropped.", "error"); }
   };
 
-  const runStrategyBacktest = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const executeStrategyBacktestSandbox = async () => {
+    setBacktestResult(null);
     try {
-      const res = await fetch(`${API_BASE}/api/backtest`, {
+      const res = await fetch(`${API_BASE}/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol: btSymbol, strategy: btStrategy, duration_months: btDuration, timeframe: btTimeframe })
       });
-      const data = await res.json();
-      if (res.ok) setBacktestResult(data);
-    } catch (e) { pushAlert("Backtest compile compute error.", 'error'); }
+      if (res.ok) {
+        const data = await res.json();
+        setBacktestResult(data);
+        pushAlert("Sandbox backtest computation matrix fully resolved.", "success");
+      } else {
+        pushAlert("Matrix processing engine validation error.", "error");
+      }
+    } catch { pushAlert("Backtest deployment target unresolvable.", "error"); }
   };
 
   if (!isLoggedIn) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#09090b] text-white p-4">
-        <div className="w-full max-w-md bg-[#18181b] border border-zinc-800 rounded-xl p-8 shadow-2xl">
-          <h2 className="text-xl font-black text-center tracking-wider text-emerald-400 mb-1">APEX_QUANT PRO ACCESS</h2>
-          <p className="text-[10px] text-zinc-500 text-center uppercase tracking-widest mb-6">Secured Quant Core Terminal</p>
+      <div className="min-h-screen bg-black flex items-center justify-center font-sans antialiased text-gray-200 p-4 selection:bg-cyan-500/30">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.08)_0,transparent_65%)]" />
+        <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 p-8 rounded-2xl relative shadow-2xl backdrop-blur-md">
+          <div className="text-center mb-8">
+            <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">⚡ APEX QUANT SYSTEM</h1>
+            <p className="text-xs text-zinc-500 mt-1 uppercase tracking-widest">Enterprise Terminal Verification Gateway</p>
+          </div>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
-              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Operator ID</label>
-              <input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" className="w-full p-3 bg-black border border-zinc-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono"/>
+              <label className="block text-[10px] uppercase tracking-wider text-zinc-400 font-bold mb-1.5">System Username</label>
+              <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-emerald-500 font-mono" placeholder="admin" required />
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">Security Password</label>
-              <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="w-full p-3 bg-black border border-zinc-800 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-mono"/>
+              <label className="block text-[10px] uppercase tracking-wider text-zinc-400 font-bold mb-1.5">System Security Token</label>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-emerald-500 font-mono" placeholder="••••••••" required />
             </div>
-            {authError && <p className="text-red-400 text-xs text-center font-mono bg-red-950/20 py-2 border border-red-900/40 rounded-lg">{authError}</p>}
-            <button type="submit" className="w-full py-3 bg-emerald-500 hover:bg-emerald-600 font-bold text-zinc-950 rounded-lg text-xs uppercase tracking-wider transition">Establish Session</button>
+            {authError && <p className="text-xs text-red-400 bg-red-950/40 border border-red-900/50 p-2.5 rounded-lg font-medium">{authError}</p>}
+            <button type="submit" className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-black font-bold py-2.5 rounded-lg text-sm tracking-wide transition-all shadow-lg shadow-emerald-950/20">Initialize Control Shell</button>
           </form>
         </div>
       </div>
@@ -324,280 +355,250 @@ export default function AlgoTradingApp() {
   }
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-zinc-100 font-sans antialiased">
-      {showAlertModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end p-4">
-          <div className="w-full max-w-md bg-[#18181b] border border-zinc-800 rounded-xl p-6 shadow-2xl flex flex-col h-full">
-            <div className="flex justify-between items-center mb-4 border-b border-zinc-800 pb-3">
-              <h3 className="font-bold text-sm tracking-wider flex items-center gap-2">🔔 NOTIFICATION TERMINAL ({alertLogs.length})</h3>
-              <button onClick={() => setShowAlertModal(false)} className="text-zinc-500 hover:text-white text-sm">✕ Close</button>
-            </div>
-            <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-              {alertLogs.length === 0 ? (
-                <p className="text-xs text-zinc-600 text-center py-10 font-mono">Telemetry clean. No active log events.</p>
-              ) : (
-                alertLogs.map(log => (
-                  <div key={log.id} className={`p-3 rounded-lg border text-xs font-mono ${log.type === 'error' ? 'bg-red-950/20 border-red-900/50 text-red-400' : log.type === 'success' ? 'bg-emerald-950/20 border-emerald-900/50 text-emerald-400' : 'bg-blue-950/20 border-blue-900/50 text-cyan-400'}`}>
-                    {log.text}
+    <div className="min-h-screen bg-black text-zinc-100 font-sans antialiased flex flex-col Selection:bg-cyan-500/20">
+      {/* Structural Header Layout */}
+      <header className="border-b border-zinc-800 bg-zinc-950/70 backdrop-blur px-6 py-4 sticky top-0 z-40 flex flex-col md:flex-row justify-between items-center gap-4">
+        <div className="flex items-center gap-3">
+          <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
+          <div>
+            <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-2">⚡ APEX QUANT <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 font-mono uppercase tracking-normal">Enterprise v3.1</span></h1>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button onClick={toggleAutoScanPipeline} className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all ${autoScanStatus === 'ON' ? 'bg-emerald-950/30 text-emerald-400 border-emerald-800' : 'bg-zinc-900 text-zinc-400 border-zinc-800'}`}>
+            STRATEGY SCANNER: {autoScanStatus}
+          </button>
+          <div className="flex bg-zinc-900 border border-zinc-800 rounded-lg p-0.5 text-xs font-mono">
+            <button onClick={() => handleUpdateExecutionSettings('OFF', timeframe)} className={`px-2.5 py-1 rounded-md transition-all font-bold ${orderPlacement === 'OFF' ? 'bg-zinc-800 text-amber-400 border border-zinc-700 shadow-sm' : 'text-zinc-500'}`}>LOG ENTRY ONLY</button>
+            <button onClick={() => handleUpdateExecutionSettings('ON', timeframe)} className={`px-2.5 py-1 rounded-md transition-all font-bold ${orderPlacement === 'ON' ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-950/30' : 'text-zinc-500'}`}>AUTO TRADING ACTIVE</button>
+          </div>
+          <select value={timeframe} onChange={(e) => handleUpdateExecutionSettings(orderPlacement, e.target.value)} className="bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-cyan-500">
+            <option value="1m">1 Minute</option>
+            <option value="5m">5 Minutes</option>
+            <option value="15m">15 Minutes</option>
+            <option value="1h">1 Hour</option>
+          </select>
+          <button onClick={() => setShowAlertModal(true)} className="relative p-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 transition-all">
+            🔔 {alertLogs.length > 0 && <span className="absolute -top-1 -right-1 h-4 w-4 bg-red-500 text-[10px] text-white font-black rounded-full flex items-center justify-center animate-bounce">{alertLogs.length}</span>}
+          </button>
+        </div>
+      </header>
+
+      {/* Main Structural Framework Body */}
+      <main className="flex-1 grid grid-cols-1 xl:grid-cols-4 p-6 gap-6 max-w-[1600px] w-full mx-auto">
+        
+        {/* Left Control Workspace Array (1 Column wide) */}
+        <div className="xl:col-span-1 space-y-6">
+          
+          {/* Fyers Access Pipeline Control Block */}
+          <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
+            <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider flex justify-between items-center font-mono">
+              Broker Configuration Link
+              <span className={`h-2 w-2 rounded-full ${fyersConnected ? 'bg-emerald-400' : 'bg-red-500'}`} />
+            </h3>
+
+            {!isConfigSaved ? (
+              <form onSubmit={saveDeveloperConfig} className="space-y-3">
+                <input type="text" placeholder="Fyers Client ID" value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500" required />
+                <input type="password" placeholder="Fyers Secret Key" value={secretKey} onChange={e => setSecretKey(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500" required />
+                <button type="submit" className="w-full bg-zinc-800 hover:bg-zinc-700 text-xs font-mono font-bold py-2 rounded-lg transition-all">Save Vault Access Keys</button>
+              </form>
+            ) : (
+              <div className="space-y-3">
+                <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs font-mono text-zinc-400 space-y-1">
+                  <p>Client ID: <span className="text-zinc-200">{clientId.substring(0,6)}...</span></p>
+                  <p>Redirect: <span className="text-zinc-500 break-all text-[10px]">{redirectUrl}</span></p>
+                </div>
+                {!fyersConnected ? (
+                  <div className="space-y-2">
+                    <button onClick={triggerFyersAuthAuthChannel} className="w-full bg-cyan-600 hover:bg-cyan-500 text-black text-xs font-mono font-bold py-2 rounded-lg transition-all">1. Extract Access Code</button>
+                    <div className="flex gap-2">
+                      <input type="text" placeholder="Paste return Auth Code" value={manualAuthCode} onChange={e => setManualAuthCode(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-emerald-500" />
+                      <button onClick={processAppCodeRegistrationToken} className="bg-emerald-600 hover:bg-emerald-500 text-black text-xs font-mono font-bold px-3 py-2 rounded-lg transition-all">2. Verify</button>
+                    </div>
                   </div>
-                ))
+                ) : (
+                  <div className="p-3 bg-emerald-950/20 border border-emerald-800/60 rounded-lg text-center">
+                    <span className="text-xs text-emerald-400 font-mono font-bold">✓ Fyers Core Core Engine Fully Hooked</span>
+                  </div>
+                )}
+                <button onClick={() => setIsConfigSaved(false)} className="w-full text-zinc-500 hover:text-zinc-400 text-[10px] font-mono text-right block transition-all">Modify API Secret Arrays</button>
+              </div>
+            )}
+          </div>
+
+          {/* Secure Live Engine Pipeline Target Watchlist */}
+          <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
+            <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider font-mono">Dynamic Portfolio Monitor</h3>
+            <form onSubmit={addSymbolToWatchlist} className="flex gap-2">
+              <input type="text" placeholder="e.g. NSE:NIFTY26JUL22000CE" value={newSymbol} onChange={e => setNewSymbol(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500 uppercase" />
+              <button type="submit" className="bg-zinc-800 hover:bg-zinc-700 text-xs font-mono px-3 py-2 rounded-lg font-bold transition-all">+</button>
+            </form>
+
+            <div className="space-y-2 max-y-[350px] overflow-y-auto pr-1">
+              {watchlist.length === 0 ? (
+                <p className="text-xs font-mono text-zinc-600 text-center py-4">Watchlist stream is empty.</p>
+              ) : (
+                watchlist.map((symbol) => {
+                  const data = livePrices[symbol] || { price: 0.00, change: 0, direction: 'neutral' };
+                  return (
+                    <div key={symbol} className="flex items-center justify-between p-3 bg-zinc-900/40 rounded-lg border border-zinc-800/80 hover:border-zinc-700 transition-all">
+                      <div className="max-w-[65%]">
+                        <p className="text-xs font-bold font-mono truncate text-zinc-200">{symbol.split(':')[1] || symbol}</p>
+                        <p className="text-[10px] font-mono text-zinc-500 truncate">{symbol.split(':')[0]}</p>
+                      </div>
+                      <div className="text-right flex items-center gap-3">
+                        <div>
+                          <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
+                            ₹{data.price.toFixed(2)}
+                          </p>
+                          <p className={`text-[9px] font-mono ${data.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                            {data.change >= 0 ? '+' : ''}{data.change}%
+                          </p>
+                        </div>
+                        <button onClick={() => removeSymbolFromWatchlist(symbol)} className="text-zinc-600 hover:text-red-400 text-xs transition-all font-mono">×</button>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
         </div>
-      )}
 
-      <header className="border-b border-zinc-800 bg-[#121214] px-4 py-3 sticky top-0 z-40 flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-black tracking-wider text-emerald-400">⚡ APEX_QUANT MULTI-STREAM</span>
-          <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded border ${fyersConnected ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/60' : 'bg-red-950/40 text-red-400 border-red-900/60'}`}>
-            {fyersConnected ? '● DATALINK SECURED' : '○ DISCONNECTED'}
-          </span>
-        </div>
-        
-        <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
-          <button onClick={() => setShowAlertModal(true)} className="relative p-2 bg-zinc-900 border border-zinc-800 rounded-lg hover:bg-zinc-800 transition">
-            <span className="text-base">🔔</span>
-            {alertLogs.length > 0 && (
-              <span className="absolute -top-1 -right-1 bg-amber-500 text-zinc-950 text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">
-                {alertLogs.length}
-              </span>
-            )}
-          </button>
-          <button onClick={() => setIsLoggedIn(false)} className="px-3 py-1.5 bg-zinc-900 border border-zinc-800 text-zinc-400 text-xs font-semibold rounded-lg hover:text-white font-mono">LOGOUT</button>
-        </div>
-      </header>
-
-      <main className="p-4 md:p-6 max-w-7xl mx-auto space-y-6">
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl lg:col-span-2">
-            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono mb-3">🔑 Fyers Persistent Vault</h3>
-            <form onSubmit={saveDeveloperConfig} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-[10px] font-mono font-bold text-zinc-500 uppercase mb-1">App Client ID</label>
-                <input type="text" required value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Client ID" className="w-full p-2 bg-black border border-zinc-800 rounded text-xs font-mono text-white focus:outline-none focus:border-emerald-500"/>
-              </div>
-              <div>
-                <label className="block text-[10px] font-mono font-bold text-zinc-500 uppercase mb-1">App Secret Key</label>
-                <input type="password" required value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder="Secret Key" className="w-full p-2 bg-black border border-zinc-800 rounded text-xs font-mono text-white focus:outline-none focus:border-emerald-500"/>
-              </div>
-              <div className="md:col-span-2 flex flex-col sm:flex-row gap-2 pt-2">
-                <button type="submit" className="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 rounded text-xs font-bold transition">Lock Config Keys</button>
-                <button type="button" onClick={launchFyersAuthFlow} className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 font-bold text-xs rounded uppercase tracking-wider text-white transition">Generate Auth Token</button>
-              </div>
-            </form>
-            <form onSubmit={submitAuthCode} className="mt-4 pt-4 border-t border-zinc-800/60 flex gap-2">
-              <input type="text" required value={manualAuthCode} onChange={(e) => setManualAuthCode(e.target.value)} placeholder="Paste redirected auth code here..." className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white focus:outline-none font-mono"/>
-              <button type="submit" className="px-4 bg-emerald-500 text-zinc-950 font-bold text-xs rounded font-mono uppercase hover:bg-emerald-600">Link Token</button>
-            </form>
+        {/* Right Tabular Multi-Panel Layout System (3 Columns Wide) */}
+        <div className="xl:col-span-3 bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col overflow-hidden">
+          <div className="border-b border-zinc-800 bg-zinc-900/40 p-2 flex gap-2">
+            <button onClick={() => setActiveTab('live-logs')} className={`px-4 py-2 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'live-logs' ? 'bg-zinc-800 text-white border border-zinc-700 shadow-inner' : 'text-zinc-400 hover:text-zinc-200'}`}>
+              Execution Log Pipeline
+            </button>
+            <button onClick={() => setActiveTab('backtest-sandbox')} className={`px-4 py-2 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'backtest-sandbox' ? 'bg-zinc-800 text-white border border-zinc-700 shadow-inner' : 'text-zinc-400 hover:text-zinc-200'}`}>
+              Deep Strategy Sandbox (Backtest)
+            </button>
           </div>
 
-          <div className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl flex flex-col justify-between">
-            <div>
-              <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono mb-2">⚙️ Operational Control Engine</h3>
-              <p className="text-[11px] text-zinc-500 mb-3">Core routing, background loops and standard scan window rules.</p>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[10px] font-mono text-zinc-400 uppercase mb-1">Timeframe Anchor</label>
-                <select value={timeframe} onChange={(e) => updateEngineConfig(orderPlacement, e.target.value)} className="w-full p-2 bg-black border border-zinc-800 rounded text-xs text-zinc-300 font-mono">
-                  <option value="1m">1 Minute Chart</option>
-                  <option value="5m">5 Minute Chart</option>
-                  <option value="15m">15 Minute Chart</option>
-                  <option value="1h">1 Hour Chart</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={() => toggleAutoScan(autoScanStatus === 'ON' ? 'OFF' : 'ON')} className={`py-2 text-[11px] font-mono rounded font-bold transition ${autoScanStatus === 'ON' ? 'bg-purple-950 border border-purple-800 text-purple-300' : 'bg-zinc-900 text-zinc-500 border border-zinc-800'}`}>
-                  {autoScanStatus === 'ON' ? '⚙️ AUTO SYNC ON' : 'PAUSED'}
-                </button>
-                <button onClick={() => updateEngineConfig(orderPlacement === 'ON' ? 'OFF' : 'ON', timeframe)} className={`py-2 text-[11px] font-mono rounded font-bold transition ${orderPlacement === 'ON' ? 'bg-emerald-500 text-zinc-950' : 'bg-amber-600/20 text-amber-400 border border-amber-900/50'}`}>
-                  {orderPlacement === 'ON' ? '🚀 AUTO ORDER' : '⚠️ MONITOR ONLY'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
+          <div className="p-6 flex-1 overflow-y-auto">
+            {activeTab === 'live-logs' ? (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xs font-mono uppercase tracking-wider font-bold text-zinc-400">Live Telemetry Pipeline Engine</h2>
+                  <span className="text-[10px] font-mono text-zinc-500">Auto Refreshing Live Stack via WebSocket</span>
+                </div>
 
-        <section className="bg-[#18181b] border border-zinc-800 p-5 rounded-xl shadow-xl">
-          <div className="mb-4">
-            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest font-mono">🎯 Live Pipeline Monitoring Watchlist</h3>
-            <p className="text-[11px] text-zinc-500">Real-time LTP ticks fetched directly from the broker pipeline.</p>
-          </div>
-          
-          <form onSubmit={addSymbolToWatchlist} className="flex gap-2 mb-5">
-            <input type="text" required value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} placeholder="Exchange:Symbol (e.g., NSE:RELIANCE-EQ)" className="flex-1 p-2 bg-black border border-zinc-800 rounded text-xs text-white font-mono focus:outline-none focus:border-zinc-700"/>
-            <button type="submit" className="px-5 py-2 bg-emerald-500 text-zinc-950 text-xs font-black uppercase rounded hover:bg-emerald-600 transition">Add Instrument</button>
-          </form>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-h-[400px] overflow-y-auto pr-1">
-            {watchlist.length === 0 ? (
-              <div className="col-span-full text-center py-8 text-zinc-600 border border-dashed border-zinc-800 rounded-xl font-mono text-xs">
-                Pipeline container empty. Add symbols to start tracking live ticks.
+                <div className="overflow-x-auto rounded-xl border border-zinc-800/80">
+                  <table className="w-full text-left border-collapse text-xs font-mono">
+                    <thead>
+                      <tr className="bg-zinc-900 text-zinc-400 uppercase tracking-wider font-bold text-[10px] border-b border-zinc-800">
+                        <th className="p-3.5">Timestamp</th>
+                        <th className="p-3.5">Trading Target</th>
+                        <th className="p-3.5">Matched Rule</th>
+                        <th className="p-3.5">Frame</th>
+                        <th className="p-3.5">Action Block</th>
+                        <th className="p-3.5">Base LTP</th>
+                        <th className="p-3.5">Absolute Net PnL</th>
+                        <th className="p-3.5">System Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-900/60 bg-black/20">
+                      {callHistory.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} className="p-8 text-center text-zinc-600 font-mono">No telemetry logic cycles executed in current container session yet.</td>
+                        </tr>
+                      ) : (
+                        callHistory.map((log) => (
+                          <tr key={log.id} className="hover:bg-zinc-900/30 transition-colors">
+                            <td className="p-3.5 text-zinc-500 whitespace-nowrap">{log.timestamp}</td>
+                            <td className="p-3.5 font-bold text-zinc-200">{log.symbol}</td>
+                            <td className="p-3.5"><span className="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-400 border border-cyan-900/60 text-[11px]">{log.strategy}</span></td>
+                            <td className="p-3.5 text-zinc-400">{log.timeframe || '5m'}</td>
+                            <td className="p-3.5">
+                              <span className={`font-black uppercase text-[11px] ${log.type === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {log.type}
+                              </span>
+                            </td>
+                            <td className="p-3.5 text-zinc-300 font-bold">₹{log.entry_price.toFixed(2)}</td>
+                            <td className={`p-3.5 font-bold ${log.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {log.pnl >= 0 ? '+' : ''}₹{log.pnl.toLocaleString('en-IN')}
+                            </td>
+                            <td className="p-3.5">
+                              <span className={`inline-flex items-center gap-1.5 font-bold uppercase text-[10px] ${log.status === 'SUCCESS' ? 'text-emerald-400' : log.status === 'PENDING' ? 'text-amber-400' : 'text-red-500'}`}>
+                                <span className={`h-1.5 w-1.5 rounded-full ${log.status === 'SUCCESS' ? 'bg-emerald-400' : log.status === 'PENDING' ? 'bg-amber-400' : 'bg-red-500'}`} />
+                                {log.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             ) : (
-              watchlist.map((sym) => {
-                const liveData = livePrices[sym] || { price: 0.00, change: 0, direction: 'neutral' };
-                let borderStateColor = 'border-zinc-800';
-                let priceTextColor = 'text-zinc-300';
-                
-                if (liveData.direction === 'up') {
-                  borderStateColor = 'border-emerald-500/40 bg-emerald-950/10';
-                  priceTextColor = 'text-emerald-400';
-                } else if (liveData.direction === 'down') {
-                  borderStateColor = 'border-red-500/40 bg-red-950/10';
-                  priceTextColor = 'text-red-400';
-                }
-
-                return (
-                  <div key={sym} className={`p-4 bg-black border ${borderStateColor} rounded-xl shadow-lg relative flex flex-col justify-between group transition-all duration-300`}>
-                    <button 
-                      type="button" 
-                      onClick={() => removeSymbolFromWatchlist(sym)} 
-                      className="absolute top-2 right-2 text-zinc-600 hover:text-red-400 font-bold text-sm transition opacity-0 group-hover:opacity-100 focus:opacity-100"
-                    >
-                      ✕
-                    </button>
-                    
-                    <div className="mb-2">
-                      <span className="text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-mono uppercase tracking-wider">
-                        {sym.split(':')[0] || 'TICKER'}
-                      </span>
-                      <h4 className="text-xs font-bold font-mono tracking-wide text-zinc-200 mt-1.5 break-all">
-                        {sym.split(':')[1] || sym}
-                      </h4>
-                    </div>
-
-                    <div className="flex items-baseline justify-between mt-2 pt-2 border-t border-zinc-900">
-                      <span className="text-[10px] font-mono text-zinc-500 uppercase">LTP</span>
-                      <div className="text-right">
-                        <span className={`text-base font-black font-mono tracking-tight transition-colors duration-200 ${priceTextColor}`}>
-                          ₹{liveData.price > 0 ? liveData.price.toLocaleString('en-IN', { minimumFractionDigits: 2 }) : "Calculating..."}
-                        </span>
-                        {liveData.change !== undefined && liveData.change !== 0 && (
-                          <p className={`text-[10px] font-mono font-medium ${liveData.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                            {liveData.change >= 0 ? `+${liveData.change}%` : `${liveData.change}%`}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </section>
-
-        <section className="bg-[#18181b] border border-zinc-800 rounded-xl shadow-xl overflow-hidden">
-          <div className="flex border-b border-zinc-800 bg-black/40">
-            <button onClick={() => setActiveTab('live-logs')} className={`flex-1 sm:flex-none px-6 py-3 text-xs font-bold font-mono tracking-wider transition-all ${activeTab === 'live-logs' ? 'border-b-2 border-emerald-400 bg-zinc-900 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>
-              📊 SIGNAL HISTORY LOGS
-            </button>
-            <button onClick={() => setActiveTab('backtest')} className={`flex-1 sm:flex-none px-6 py-3 text-xs font-bold font-mono tracking-wider transition-all ${activeTab === 'backtest' ? 'border-b-2 border-emerald-400 bg-zinc-900 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}>
-              🔬 VECTOR BACKTEST ENGINE
-            </button>
-          </div>
-
-          <div className="p-4">
-            {activeTab === 'live-logs' && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-black text-[10px] font-bold text-zinc-400 uppercase border-b border-zinc-800">
-                    <tr>
-                      <th className="p-3">Time / TF</th>
-                      <th className="p-3">Asset Identity</th>
-                      <th className="p-3">Strategy</th>
-                      <th className="p-3">Entry Matrix</th>
-                      <th className="p-3">SL / Target</th>
-                      <th className="p-3 text-right">PnL Yield Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-900">
-                    {callHistory.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="text-center py-10 text-zinc-600">No background signals tracked yet. Active daemon watching asset pool...</td>
-                      </tr>
-                    ) : (
-                      callHistory.map((call) => (
-                        <tr key={call.id} className="hover:bg-zinc-900/40 transition">
-                          <td className="p-3 text-zinc-500">{call.timestamp}<br/><span className="text-[10px] text-purple-400">{call.timeframe}</span></td>
-                          <td className="p-3 font-bold text-zinc-200">{call.symbol}</td>
-                          <td className="p-3"><span className="px-1.5 py-0.5 bg-zinc-900 border border-zinc-800 text-zinc-300 rounded text-[10px]">{call.strategy}</span></td>
-                          <td className="p-3 text-emerald-400 font-bold">₹{call.entry_price}</td>
-                          <td className="p-3 text-zinc-400">SL: <span className="text-red-400">₹{call.sl}</span><br/>Tgt: <span className="text-emerald-400">₹{call.target}</span></td>
-                          <td className="p-3 text-right">
-                            <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${call.status === 'TARGET HIT' ? 'bg-emerald-950/60 text-emerald-400' : call.status === 'SL HIT' ? 'bg-red-950/60 text-red-400' : 'bg-zinc-800 text-zinc-400'}`}>
-                              {call.status}
-                            </span>
-                            <div className={`font-bold mt-1 ${call.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                              {call.pnl >= 0 ? `+₹${call.pnl}` : `-₹${Math.abs(call.pnl)}`}
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            {activeTab === 'backtest' && (
               <div className="space-y-6">
-                <form onSubmit={runStrategyBacktest} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 items-end bg-black/40 p-4 rounded-lg border border-zinc-800/80">
+                <div>
+                  <h2 className="text-xs font-mono uppercase tracking-wider font-bold text-zinc-400 mb-1">Deep Strategy Backtest Compute Unit</h2>
+                  <p className="text-xs text-zinc-500">Run parallel offline historical simulation on options/equities arrays.</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-5 bg-zinc-900/30 rounded-xl border border-zinc-800">
                   <div>
-                    <label className="block text-[10px] font-mono font-bold text-zinc-500 uppercase mb-1">Target Node</label>
-                    <select value={btSymbol} onChange={(e) => setBtSymbol(e.target.value)} className="w-full p-2 bg-black border border-zinc-800 rounded text-xs text-zinc-300 font-mono">
-                      {watchlist.map((sym) => <option key={sym} value={sym}>{sym}</option>)}
-                      {watchlist.length === 0 && <option value="NSE:RELIANCE-EQ">NSE:RELIANCE-EQ</option>}
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Target Asset Token</label>
+                    <input type="text" value={btSymbol} onChange={e => setBtSymbol(e.target.value)} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500 uppercase" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Strategy Logic Module</label>
+                    <select value={btStrategy} onChange={e => setBtStrategy(e.target.value)} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500">
+                      <option value="EMA_Crossover_9_21">EMA Crossover (9/21)</option>
+                      <option value="RSI_Oversold_30">RSI Oversold Filter (30)</option>
+                      <option value="Supertrend_Buy">Supertrend Wave Rider (7,3)</option>
+                      <option value="MACD_Bullish_Cross">MACD Bullish Cross Engine</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-mono font-bold text-zinc-500 uppercase mb-1">Strategy Matrix</label>
-                    <select value={btStrategy} onChange={(e) => setBtStrategy(e.target.value)} className="w-full p-2 bg-black border border-zinc-800 rounded text-xs text-zinc-300 font-mono">
-                      <option value="EMA_Crossover_9_21">EMA Crossover (9-21)</option>
-                      <option value="RSI_Oversold_30">RSI Oversold (14, 30)</option>
-                      <option value="Supertrend_Buy">Supertrend Buy (7, 3)</option>
-                      <option value="MACD_Bullish_Cross">MACD Bullish Cross</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-mono font-bold text-zinc-500 uppercase mb-1">Timeframe Select</label>
-                    <select value={btTimeframe} onChange={(e) => setBtTimeframe(e.target.value)} className="w-full p-2 bg-black border border-zinc-800 rounded text-xs text-zinc-300 font-mono">
-                      <option value="1m">1 min</option>
-                      <option value="5m">5 min</option>
-                      <option value="15m">15 min</option>
-                      <option value="1h">1 hour</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-mono font-bold text-zinc-500 uppercase mb-1">Historical Window</label>
-                    <select value={btDuration} onChange={(e) => setBtDuration(Number(e.target.value))} className="w-full p-2 bg-black border border-zinc-800 rounded text-xs text-zinc-300 font-mono">
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Evaluation Window</label>
+                    <select value={btDuration} onChange={e => setBtDuration(Number(e.target.value))} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500">
                       <option value={1}>1 Month Window</option>
                       <option value={2}>2 Months Window</option>
                       <option value={3}>3 Months Window</option>
                     </select>
                   </div>
-                  <button type="submit" className="w-full py-2 bg-blue-600 hover:bg-blue-700 font-bold rounded text-xs text-white uppercase font-mono transition">Compute Backplane</button>
-                </form>
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Resolution Frame</label>
+                    <select value={btTimeframe} onChange={e => setBtTimeframe(e.target.value)} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500">
+                      <option value="1m">1 Minute Matrix</option>
+                      <option value="5m">5 Minutes Matrix</option>
+                      <option value="15m">15 Minutes Matrix</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-4 pt-2">
+                    <button onClick={executeStrategyBacktestSandbox} className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-black font-black font-mono text-xs py-2.5 rounded-lg tracking-wide transition-all shadow-lg shadow-cyan-950/20">Compile & Execute Sandbox Run Matrix</button>
+                  </div>
+                </div>
 
                 {backtestResult && (
-                  <div className="space-y-4 font-mono">
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div className="bg-black border border-zinc-800 p-4 rounded-lg">
-                        <p className="text-[10px] text-zinc-500 uppercase">Test Config Setup</p>
-                        <p className="text-sm font-bold text-cyan-400 mt-1">{backtestResult.duration_tested} ({backtestResult.timeframe})</p>
+                  <div className="space-y-4 animate-fadeIn">
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-zinc-900/50 rounded-xl border border-zinc-800/80 font-mono text-xs">
+                      <div>
+                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Timeline Checked</p>
+                        <p className="text-sm font-bold text-cyan-400">{backtestResult.duration_tested || `${btDuration} Month(s)`}</p>
                       </div>
-                      <div className="bg-black border border-zinc-800 p-4 rounded-lg">
-                        <p className="text-[10px] text-zinc-500 uppercase">Simulated Base Capital</p>
-                        <p className="text-sm font-bold text-zinc-300 mt-1">₹{backtestResult.initial_balance.toLocaleString('en-IN')}</p>
+                      <div>
+                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Initial Capital</p>
+                        <p className="text-sm font-bold text-zinc-300">₹{backtestResult.initial_balance.toLocaleString('en-IN')}</p>
                       </div>
-                      <div className="bg-black border border-zinc-800 p-4 rounded-lg">
-                        <p className="text-[10px] text-zinc-500 uppercase">Total Completed Cycles</p>
-                        <p className="text-sm font-bold text-purple-400 mt-1">{backtestResult.total_trades} Trades</p>
+                      <div>
+                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Completed Cycles</p>
+                        <p className="text-sm font-bold text-purple-400">{backtestResult.total_trades}</p>
                       </div>
-                      <div className="bg-black border border-zinc-800 p-4 rounded-lg">
-                        <p className="text-[10px] text-zinc-500 uppercase">Win Efficiency Rate</p>
-                        <p className="text-sm font-bold text-amber-400 mt-1">{backtestResult.win_rate}</p>
+                      <div>
+                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Win Efficiency</p>
+                        <p className="text-sm font-bold text-amber-400">{backtestResult.win_rate}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Net Generated Yield</p>
+                        <p className={`text-sm font-bold ${backtestResult.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {backtestResult.net_profit >= 0 ? '+' : ''}₹{backtestResult.net_profit.toLocaleString('en-IN')}
+                        </p>
                       </div>
                     </div>
 
@@ -620,8 +621,38 @@ export default function AlgoTradingApp() {
               </div>
             )}
           </div>
-        </section>
+        </div>
       </main>
+
+      {/* Emergency System Alerts Logging Panel System Overlay Modal */}
+      {showAlertModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="w-full max-w-2xl bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col max-h-[80vh] shadow-2xl">
+            <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/20">
+              <h3 className="text-xs uppercase font-bold tracking-wider text-zinc-400 font-mono">System Signal & Error Runtime Log Buffer</h3>
+              <button onClick={() => setShowAlertModal(false)} className="text-zinc-500 hover:text-white text-sm font-mono font-bold transition-colors">×</button>
+            </div>
+            <div className="p-4 overflow-y-auto space-y-2 flex-1 bg-black/40">
+              {alertLogs.length === 0 ? (
+                <p className="text-xs font-mono text-zinc-600 text-center py-8">Buffer registry is entirely empty.</p>
+              ) : (
+                alertLogs.map((log) => (
+                  <div key={log.id} className={`p-3 rounded-lg border text-xs font-mono transition-all ${log.type === 'error' ? 'bg-red-950/20 text-red-400 border-red-900/60' : log.type === 'signal' ? 'bg-cyan-950/30 text-cyan-400 border-cyan-800/60 animate-pulse' : 'bg-zinc-900/60 text-emerald-400 border-zinc-800'}`}>
+                    <div className="flex justify-between text-[10px] text-zinc-500 mb-1">
+                      <span>{log.type.toUpperCase()} CAPTURE LOG</span>
+                      <span>{new Date(log.id).toLocaleTimeString()}</span>
+                    </div>
+                    <p className="font-medium text-zinc-200">{log.text}</p>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="p-3 border-t border-zinc-800 bg-zinc-900/30 flex justify-end">
+              <button onClick={() => { setAlertLogs([]); setShowAlertModal(false); }} className="text-zinc-500 hover:text-red-400 text-[11px] font-mono transition-all">Clear Event Memory Core</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
