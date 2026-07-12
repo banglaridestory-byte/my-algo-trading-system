@@ -155,7 +155,6 @@ export default function AlgoTradingApp() {
     e.preventDefault();
     setAuthError('');
     try {
-      // ✅ Explicit cleanly formed POST network link mapping loop
       const res = await fetch(`${API_BASE}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -355,7 +354,7 @@ export default function AlgoTradingApp() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 font-sans antialiased flex flex-col Selection:bg-cyan-500/20">
+    <div className="min-h-screen bg-black text-zinc-100 font-sans antialiased flex flex-col selection:bg-cyan-500/20">
       {/* Structural Header Layout */}
       <header className="border-b border-zinc-800 bg-zinc-950/70 backdrop-blur px-6 py-4 sticky top-0 z-40 flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="flex items-center gap-3">
@@ -419,7 +418,7 @@ export default function AlgoTradingApp() {
                   </div>
                 ) : (
                   <div className="p-3 bg-emerald-950/20 border border-emerald-800/60 rounded-lg text-center">
-                    <span className="text-xs text-emerald-400 font-mono font-bold">✓ Fyers Core Core Engine Fully Hooked</span>
+                    <span className="text-xs text-emerald-400 font-mono font-bold">✓ Fyers Core Engine Fully Hooked</span>
                   </div>
                 )}
                 <button onClick={() => setIsConfigSaved(false)} className="w-full text-zinc-500 hover:text-zinc-400 text-[10px] font-mono text-right block transition-all">Modify API Secret Arrays</button>
@@ -435,7 +434,7 @@ export default function AlgoTradingApp() {
               <button type="submit" className="bg-zinc-800 hover:bg-zinc-700 text-xs font-mono px-3 py-2 rounded-lg font-bold transition-all">+</button>
             </form>
 
-            <div className="space-y-2 max-y-[350px] overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
               {watchlist.length === 0 ? (
                 <p className="text-xs font-mono text-zinc-600 text-center py-4">Watchlist stream is empty.</p>
               ) : (
@@ -450,15 +449,12 @@ export default function AlgoTradingApp() {
                       <div className="text-right flex items-center gap-3">
                         <div>
                           <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
-                           <div>
-  <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
-    ₹{data.price.toFixed(2)}
-  </p>
-  {/* ✅ Safely handle optional change property with Nullish Coalescing Operator */}
-  <p className={`text-[9px] font-mono ${(data.change ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-    {(data.change ?? 0) >= 0 ? '+' : ''}{(data.change ?? 0)}%
-  </p>
-</div>
+                            ₹{data.price.toFixed(2)}
+                          </p>
+                          {/* ✅ Handled optional 'change' safely with Nullish Coalescing Operator */}
+                          <p className={`text-[9px] font-mono ${(data.change ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                            {(data.change ?? 0) >= 0 ? '+' : ''}{(data.change ?? 0)}%
+                          </p>
                         </div>
                         <button onClick={() => removeSymbolFromWatchlist(symbol)} className="text-zinc-600 hover:text-red-400 text-xs transition-all font-mono">×</button>
                       </div>
