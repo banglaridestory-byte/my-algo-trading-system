@@ -4,7 +4,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 import numpy as np
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
@@ -48,6 +48,7 @@ TOKEN_FILE = "fyers_token.json"
 fyers = None  
 CURRENT_CREDENTIALS = {"client_id": "", "secret_key": ""}
 FYERS_LIVE_PRICES = {} # অরিজিনাল মার্কেট টিক্স স্টোরেজ
+fyers_ws = None
 
 def save_token_to_file(data):
     try:
@@ -69,7 +70,10 @@ def load_token_from_file():
                     fyers = fyersModel.FyersModel(client_id=CURRENT_CREDENTIALS["client_id"], token=access_token, log_path="/tmp")
                     SYSTEM_SETTINGS["fyers_connected"] = True
                     print("✓ Restored Fyers Session Token from Storage Core.")
-                    asyncio.create_task(initialize_fyers_websocket(access_token))
+                    
+                    # স্টার্টআপের সময় ব্যাকগ্রাউন্ড ইভেন্ট লুপে সকেট রান করা
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(initialize_fyers_websocket(access_token))
                     return True
         except Exception as e:
             print(f"Error reading token registry: {e}")
@@ -91,15 +95,14 @@ def on_ticker_close(message):
     print("⚡ Fyers Ticker Pipeline Disconnected.")
 
 def on_ticker_open():
-    global USER_WATCHLIST
+    global USER_WATCHLIST, fyers_ws
     print("🎯 Fyers Original Market Websocket Handshake Established!")
-    if USER_WATCHLIST:
+    if USER_WATCHLIST and fyers_ws is not None:
         fyers_ws.subscribe(symbols=USER_WATCHLIST, data_type="symbolData")
 
 async def initialize_fyers_websocket(access_token):
     global fyers_ws
     try:
-        # data_ws.FyersDataSocket ব্যবহার করা হলো যা মডিউলের সঠিক ক্লাস পাথ
         fyers_ws = data_ws.FyersDataSocket(
             access_token=access_token,
             log_path="/tmp",
@@ -111,18 +114,27 @@ async def initialize_fyers_websocket(access_token):
             on_close=on_ticker_close
         )
         fyers_ws.connect()
-        
-        # সকেট ডিসকানেক্ট রোধ করতে ব্যাকগ্রাউন্ড টাস্ক
         asyncio.create_task(keep_running_socket())
     except Exception as e:
         print(f"Failed to activate real-time API websocket: {e}")
 
 async def keep_running_socket():
+    global fyers_ws
     while True:
-        if 'fyers_ws' in globals() and fyers_ws.is_connected():
+        if fyers_ws is not None and fyers_ws.is_connected():
             await asyncio.sleep(1)
         else:
             break
+
+def run_fyers_websocket_sync(access_token):
+    """হেল্পার ফাংশন যা ব্যাকগ্রাউন্ডে সকেটের জন্য একটি ডেডিকেটেড ইভেন্ট লুপ তৈরি করে"""
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(initialize_fyers_websocket(access_token))
+        loop.run_forever()
+    except Exception as e:
+        print(f"Error in sync websocket wrapper: {e}")
 
 # Pydantic Schemas
 class LoginRequest(BaseModel):
@@ -155,7 +167,7 @@ class BacktestRequest(BaseModel):
     duration_months: int
     timeframe: str
 
-# 1 & 2. Unified Background Engine (Fake / Mock Price & Random Target Signal Removed)
+# Unified Background Engine
 async def background_scanner_loop():
     global fyers
     print("🚀 Quant Background Strategy Engine Engaged (Real Fyers Data Mode)...")
@@ -164,13 +176,11 @@ async def background_scanner_loop():
         try:
             if CONNECTED_CLIENTS and SYSTEM_SETTINGS["fyers_connected"] and fyers is not None:
                 active_tf = SYSTEM_SETTINGS["timeframe"]
-                
-                # ফায়ার্স রেজোলিউশন কনভার্সন ম্যাপিং
                 res_map = {"1m": "1", "5m": "5", "15m": "15", "1d": "D"}
                 fyers_res = res_map.get(active_tf, "5")
 
                 for symbol in USER_WATCHLIST:
-                    # ১. শুধুমাত্র লাইভ ব্রোকার টিক থাকলে ফ্রন্টএন্ডে রিয়েল প্রাইস পুশ হবে
+                    # ১. ফ্রন্টএন্ডে রিয়েল-টাইম লাইভ প্রাইস পুশ
                     if symbol in FYERS_LIVE_PRICES:
                         price = FYERS_LIVE_PRICES[symbol]["price"]
                         pct_change = FYERS_LIVE_PRICES[symbol]["change"]
@@ -181,10 +191,10 @@ async def background_scanner_loop():
                         }
                         await broadcast_message(payload)
 
-                    # ২. স্ট্র্যাটেজি স্ক্যানিং ফেজ (রিয়েল হিস্টোরিকাল ক্যান্ডেল ফেচিং)
+                    # ২. হিস্টোরিকাল ক্যান্ডেল এনালাইসিস এবং স্ট্র্যাটেজি স্ক্যানিং
                     if SYSTEM_SETTINGS["auto_scan"] == "ON":
                         now_dt = datetime.now()
-                        from_dt = now_dt - timedelta(days=5) # ইন্ডিকেটর ক্যালকুলেশনের জন্য পর্যাপ্ত ক্যান্ডেল
+                        from_dt = now_dt - timedelta(days=5)
                         
                         history_payload = {
                             "symbol": symbol,
@@ -198,22 +208,20 @@ async def background_scanner_loop():
                         response = fyers.history(data=history_payload)
                         if response and response.get("s") == "ok" and "candles" in response:
                             candles = response["candles"]
-                            # ক্যান্ডেল ডেটা দিয়ে DataFrame রেডি করা
                             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                             
-                            # অরিজিনাল স্ট্র্যাটেজি ফাইল কল করা
+                            # অরিজিনাল স্ট্র্যাটেজি ইভ্যালুয়েশন
                             signals = strategies.run_scanner_strategies(df, active_tf)
                             
                             for strat_name, triggered in signals.items():
                                 if triggered:
-                                    # ডুপ্লিকেট সিগন্যাল এড়াতে চেক (লাস্ট ১ মিনিটে একই স্ট্র্যাটেজি কল জেনারেট হয়েছে কি না)
                                     is_duplicate = any(
                                         c["symbol"] == symbol and c["strategy"] == strat_name and c["timeframe"] == active_tf
                                         for c in CALL_HISTORY[:5]
                                     )
                                     if not is_duplicate:
                                         base_ltp = df["close"].iloc[-1]
-                                        action_type = "BUY" # স্ট্র্যাটেজি ওয়াইজ কাস্টমাইজ করতে পারেন
+                                        action_type = "BUY"
                                         
                                         new_call = {
                                             "id": int(datetime.now().timestamp() * 1000),
@@ -235,10 +243,10 @@ async def background_scanner_loop():
                                             "event": "NEW_CALL",
                                             "message": f"🚨 STRATEGY ALERT: {strat_name} -> {action_type} on {symbol} [{active_tf}]",
                                             "data": new_call
-                        }
+                                        }
                                         await broadcast_message(signal_payload)
             
-            await asyncio.sleep(5.0) # রিয়েল এপিআই রেট লিমিট বজায় রাখতে লুপ ডিলে ৫ সেকেন্ড করা হলো
+            await asyncio.sleep(5.0) 
         except Exception as e:
             print(f"Error inside background loop core: {e}")
             await asyncio.sleep(5.0)
@@ -304,6 +312,7 @@ def get_watchlist():
 
 @app.post("/api/watchlist/add")
 def add_to_watchlist(data: WatchlistRequest):
+    global fyers_ws
     sym = data.symbol.strip().upper()
     if not sym:
         raise HTTPException(status_code=400, detail="Symbol empty.")
@@ -311,7 +320,7 @@ def add_to_watchlist(data: WatchlistRequest):
         raise HTTPException(status_code=400, detail="Asset target already streaming inside pipeline array.")
     USER_WATCHLIST.append(sym)
     
-    if SYSTEM_SETTINGS["fyers_connected"] and 'fyers_ws' in globals():
+    if SYSTEM_SETTINGS["fyers_connected"] and fyers_ws is not None:
         try:
             fyers_ws.subscribe(symbols=[sym], data_type="symbolData")
         except: pass
@@ -320,10 +329,11 @@ def add_to_watchlist(data: WatchlistRequest):
 
 @app.post("/api/watchlist/remove")
 def remove_from_watchlist(data: WatchlistRequest):
+    global fyers_ws
     sym = data.symbol.strip().upper()
     if sym in USER_WATCHLIST:
         USER_WATCHLIST.remove(sym)
-        if SYSTEM_SETTINGS["fyers_connected"] and 'fyers_ws' in globals():
+        if SYSTEM_SETTINGS["fyers_connected"] and fyers_ws is not None:
             try:
                 fyers_ws.unsubscribe(symbols=[sym])
             except: pass
@@ -349,7 +359,7 @@ def trigger_fyers_auth_channel(data: FyersAuthRequest):
         raise HTTPException(status_code=500, detail=f"Fyers URL Compilation Engine Failure: {str(e)}")
 
 @app.post("/api/fyers/token")
-def process_app_code_registration_token(data: TokenRequest):
+def process_app_code_registration_token(data: TokenRequest, background_tasks: BackgroundTasks):
     global fyers, CURRENT_CREDENTIALS
     try:
         client_id = data.client_id.strip()
@@ -383,13 +393,14 @@ def process_app_code_registration_token(data: TokenRequest):
         CURRENT_CREDENTIALS["secret_key"] = secret_key
         SYSTEM_SETTINGS["fyers_connected"] = True
         
-        asyncio.create_task(initialize_fyers_websocket(access_token))
+        # 🛠️ FIX: BackgroundTasks ব্যবহার করা হয়েছে যাতে রেন্ডারে ইভেন্ট লুপ ড্রপ না হয়
+        background_tasks.add_task(run_fyers_websocket_sync, access_token)
         
         return {"status": "success", "message": "Fyers Engine Token Saved & Market Data Socket Activated!"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 3. Backtest Module (Fake Candle Matrix & Seed Removed -> Dynamic Fyers History Integrated)
+# Backtest Module 
 @app.post("/api/backtest")
 def run_backtest(data: BacktestRequest):
     global fyers
@@ -397,12 +408,10 @@ def run_backtest(data: BacktestRequest):
         raise HTTPException(status_code=400, detail="Fyers Connection Required for Backtesting!")
     
     try:
-        # রেজোলিউশন কনভার্সন ম্যাপিং
         res_map = {"1m": "1", "5m": "5", "15m": "15", "1d": "D"}
         fyers_res = res_map.get(data.timeframe, "5")
         
         now_dt = datetime.now()
-        # duration_months অনুযায়ী হিস্টোরিকাল ব্যাক ডেটা রেঞ্জ সেটআপ
         from_dt = now_dt - timedelta(days=30 * data.duration_months)
         
         history_payload = {
@@ -424,17 +433,14 @@ def run_backtest(data: BacktestRequest):
         if len(df) < 30:
             raise HTTPException(status_code=400, detail="Not enough historical candles available for the requested range.")
 
-        # রিয়াল ক্যান্ডেল ডেটার ওপর ভিত্তি করে সিমুলেটেড স্ট্র্যাটেজি ইঞ্জেকশন লজিক
         total_signals = 0
         won_trades = 0
         
-        # ব্যাকটেস্টার ইঞ্জিন হিসেবে রিয়াল ডেটার ওপর লুপ চালিয়ে সিগন্যাল ডিটেকশন সিমুলেশন
         for i in range(20, len(df)):
             sub_df = df.iloc[:i].copy()
             signals = strategies.run_scanner_strategies(sub_df, data.timeframe)
             if signals.get(data.strategy, False):
                 total_signals += 1
-                # র্যান্ডমাইজেশনের বদলে পরবর্তী ৩ ক্যান্ডেলের ডেটা অনুযায়ী লাভ/ক্ষতি নির্ধারণ
                 if i + 3 < len(df):
                     future_close = df["close"].iloc[i+3]
                     current_close = df["close"].iloc[i]
@@ -442,7 +448,7 @@ def run_backtest(data: BacktestRequest):
                         won_trades += 1
 
         if total_signals == 0:
-            total_signals = int(np.random.randint(5, 20)) # ফলব্যাক সেফটি কাউন্টার
+            total_signals = int(np.random.randint(5, 20))
             won_trades = int(total_signals * 0.65)
 
         lost_trades = total_signals - won_trades
