@@ -43,306 +43,358 @@ export default function AlgoTradingApp() {
 
   const [clientId, setClientId] = useState<string>('');
   const [secretKey, setSecretKey] = useState<string>('');
-  const [redirectUrl, setRedirectUrl] = useState<string>('');
+  const [redirectUrl, setRedirectUrl] = useState<string>('https://algo-trading-frontend-app.vercel.app');
   const [isConfigSaved, setIsConfigSaved] = useState<boolean>(false);
   const [manualAuthCode, setManualAuthCode] = useState<string>('');
 
   const [fyersConnected, setFyersConnected] = useState<boolean>(false);
   const [orderPlacement, setOrderPlacement] = useState<string>('OFF');
+  const [autoScan, setAutoScan] = useState<string>('ON');
   const [timeframe, setTimeframe] = useState<string>('5m');
-  const [autoScanStatus, setAutoScanStatus] = useState<string>('ON');
 
   const [watchlist, setWatchlist] = useState<string[]>([]);
   const [newSymbol, setNewSymbol] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<string>('live-logs');
-  const [callHistory, setCallHistory] = useState<CallLog[]>([]);
-  
   const [livePrices, setLivePrices] = useState<LivePrices>({});
-  const [alertLogs, setAlertLogs] = useState<{ id: number; text: string; type: 'success' | 'error' | 'signal' }[]>([]);
-  const [showAlertModal, setShowAlertModal] = useState<boolean>(false);
+  const [callsHistory, setCallsHistory] = useState<CallLog[]>([]);
 
   const [btSymbol, setBtSymbol] = useState<string>('NSE:RELIANCE-EQ');
   const [btStrategy, setBtStrategy] = useState<string>('EMA_Crossover_9_21');
-  const [btDuration, setBtDuration] = useState<number>(1);
+  const [btDuration, setBtDuration] = useState<number>(3);
   const [btTimeframe, setBtTimeframe] = useState<string>('5m');
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [isBacktesting, setIsBacktesting] = useState<boolean>(false);
 
-  const getSanitizedBase = () => {
-    let base = process.env.NEXT_PUBLIC_API_BASE || "https://my-algo-trading-system.onrender.com";
-    base = base.trim();
-    if (base.endsWith('/')) base = base.slice(0, -1);
-    if (base.endsWith('/api')) base = base.slice(0, -4);
-    return base;
+  const [alertLogs, setAlertLogs] = useState<{ id: number; text: string; type: 'signal' | 'system' | 'error' }[]>([]);
+  const [isAlertDrawerOpen, setIsAlertDrawerOpen] = useState<boolean>(false);
+
+  const BACKEND_URL = 'https://my-algo-trading-system.onrender.com';
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const addAlertLog = (text: string, type: 'signal' | 'system' | 'error' = 'system') => {
+    setAlertLogs((prev) => [{ id: Date.now(), text, type }, ...prev].slice(0, 100));
   };
-
-  const BASE_HOST = getSanitizedBase(); 
-  const API_BASE = `${BASE_HOST}/api`;
-
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setRedirectUrl(window.location.origin + '/');
-      audioRef.current = new Audio("https://assets.mixkit.co/active_storage/sfx/2869/2869-500.wav");
-      
-      const savedId = localStorage.getItem('fyers_client_id');
-      const savedSecret = localStorage.getItem('fyers_secret_key');
-      if (savedId && savedSecret) {
-        setClientId(savedId);
-        setSecretKey(savedSecret);
-        setIsConfigSaved(true);
-      }
-    }
-  }, []);
 
   useEffect(() => {
     if (isLoggedIn) {
-      fetchSystemSettings();
+      fetchSettings();
       fetchWatchlist();
-      fetchCallHistory();
+      fetchHistory();
+      initWebSocket();
+    }
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+    };
+  }, [isLoggedIn]);
 
-      const wsUrl = BASE_HOST.replace("https://", "wss://").replace("http://", "ws://") + "/ws/alerts";
+  const initWebSocket = () => {
+    try {
+      const wsUrl = `${BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://')}/ws/alerts`;
       const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        addAlertLog('WebSocket core link established streaming data array.', 'system');
+      };
 
       ws.onmessage = (event) => {
         try {
-          const parseData = JSON.parse(event.data);
-          
-          if (parseData.event === "NEW_CALL") {
-            pushAlert(parseData.message, 'signal');
-            if (audioRef.current) audioRef.current.play().catch(() => {});
-            setCallHistory(prev => [parseData.data, ...prev]);
-          } else if (parseData.event === "SYSTEM_ERROR") {
-            pushAlert(parseData.message, 'error');
-          } else if (parseData.event === "PRICE_UPDATE") {
-            const { symbol, price, change } = parseData.data;
-            setLivePrices(prev => {
-              const oldPrice = prev[symbol]?.price || price;
+          const payload = JSON.parse(event.data);
+          if (payload.event === 'PRICE_UPDATE') {
+            const { symbol, price, change } = payload.data;
+            setLivePrices((prev) => {
+              const oldPrice = prev[symbol]?.price || 0;
               const direction = price > oldPrice ? 'up' : price < oldPrice ? 'down' : prev[symbol]?.direction || 'neutral';
               return {
                 ...prev,
-                [symbol]: { price, change, direction }
+                [symbol]: { price, change, direction },
               };
             });
+          } else if (payload.event === 'NEW_CALL') {
+            setCallsHistory((prev) => [payload.data, ...prev]);
+            addAlertLog(payload.message, 'signal');
+            if (Notification.permission === 'granted') {
+              new Notification('⚡ ALGO SIGNAL DETECTED', { body: payload.message });
+            }
           }
         } catch (e) {
-          console.error("WS Telemetry connection fault", e);
+          console.error('WS parsing failure:', e);
         }
       };
 
-      return () => ws.close();
-    }
-  }, [isLoggedIn]);
+      ws.onerror = () => {
+        addAlertLog('WebSocket node encountered data integrity frame error.', 'error');
+      };
 
-  const pushAlert = (text: string, type: 'success' | 'error' | 'signal') => {
-    setAlertLogs(prev => [{ id: Date.now(), text, type }, ...prev]);
+      ws.onclose = () => {
+        addAlertLog('WebSocket streaming dropped. Attempting pipeline reload...', 'error');
+        setTimeout(() => {
+          if (isLoggedIn) initWebSocket();
+        }, 5000);
+      };
+    } catch (err) {
+      console.error('WS initialization crash:', err);
+    }
   };
 
-  const saveDeveloperConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    localStorage.setItem('fyers_client_id', clientId.trim());
-    localStorage.setItem('fyers_secret_key', secretKey.trim());
-    setIsConfigSaved(true);
-    pushAlert("Developer credentials saved to vault successfully.", "success");
+  const requestNotificationPermission = () => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      Notification.requestPermission();
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/settings`);
+      const data = await res.json();
+      setFyersConnected(data.fyers_connected);
+      setOrderPlacement(data.order_placement);
+      setAutoScan(data.auto_scan || 'ON');
+      setTimeframe(data.timeframe || '5m');
+    } catch (err) {
+      addAlertLog('Failed to synchronize global operational matrices.', 'error');
+    }
+  };
+
+  const fetchWatchlist = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/watchlist`);
+      const data = await res.json();
+      setWatchlist(data.watchlist || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchHistory = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/calls/history`);
+      const data = await res.json();
+      setCallsHistory(data.history || []);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
     try {
-      const res = await fetch(`${API_BASE}/login`, {
+      const res = await fetch(`${BACKEND_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username.trim(), password: password.trim() })
+        body: JSON.stringify({ username, password }),
       });
-      if (res.ok) setIsLoggedIn(true);
-      else setAuthError("Security Authentication Rejected.");
+      if (res.ok) {
+        setIsLoggedIn(true);
+        requestNotificationPermission();
+        addAlertLog('Root operator bypass verification matrix validated.', 'system');
+      } else {
+        setAuthError('Access restricted. Valid verification block required.');
+      }
     } catch (err) {
-      setAuthError("Quant System Core Unreachable!");
+      setAuthError('Authentication controller pipeline cluster unreachable.');
     }
   };
 
-  const fetchSystemSettings = async () => {
+  const handleUpdateSettings = async (newOrder: string, newTf: string) => {
     try {
-      const res = await fetch(`${API_BASE}/settings`);
+      const res = await fetch(`${BACKEND_URL}/api/settings/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_placement: newOrder, timeframe: newTf }),
+      });
       if (res.ok) {
-        const data = await res.json();
-        setFyersConnected(data.fyers_connected);
-        setOrderPlacement(data.order_placement);
-        setTimeframe(data.timeframe || '5m');
-        setAutoScanStatus(data.auto_scan || 'ON');
+        setOrderPlacement(newOrder);
+        setTimeframe(newTf);
+        addAlertLog(`Terminal execution modified. Orders: ${newOrder} | TF: ${newTf}`, 'system');
       }
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      addAlertLog('Failed to commit modified hardware runtime rules.', 'error');
+    }
   };
 
-  const fetchWatchlist = async () => {
+  const toggleAutoScan = async () => {
+    const targetStatus = autoScan === 'ON' ? 'OFF' : 'ON';
     try {
-      const res = await fetch(`${API_BASE}/watchlist`);
+      const res = await fetch(`${BACKEND_URL}/api/settings/autoscan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_scan: targetStatus }),
+      });
       if (res.ok) {
-        const data = await res.json();
-        setWatchlist(data.watchlist || []);
-        const initialPrices: LivePrices = {};
-        (data.watchlist || []).forEach((sym: string) => {
-          initialPrices[sym] = { price: 0.00, change: 0, direction: 'neutral' };
-        });
-        setLivePrices(initialPrices);
+        setAutoScan(targetStatus);
+        addAlertLog(`Heuristic auto scanning telemetry module toggled ${targetStatus}.`, 'system');
       }
-    } catch (err) { console.error(err); }
+    } catch (err) {
+      addAlertLog('Scanner control framework did not reply correctly.', 'error');
+    }
   };
 
-  const fetchCallHistory = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/calls/history`);
-      if (res.ok) {
-        const data = await res.json();
-        setCallHistory(data.history || []);
-      }
-    } catch (e) { console.error(e); }
-  };
-
-  const addSymbolToWatchlist = async (e: React.FormEvent) => {
+  const handleAddToWatchlist = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanSymbol = newSymbol.trim().toUpperCase();
-    if (!cleanSymbol) return;
+    if (!newSymbol.trim()) return;
     try {
-      const res = await fetch(`${API_BASE}/watchlist/add`, {
+      const res = await fetch(`${BACKEND_URL}/api/watchlist/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: cleanSymbol })
+        body: JSON.stringify({ symbol: newSymbol.trim() }),
       });
-      const data = await res.json();
       if (res.ok) {
+        const data = await res.json();
         setWatchlist(data.watchlist);
-        setLivePrices(prev => ({ ...prev, [cleanSymbol]: { price: 0.00, change: 0, direction: 'neutral' } }));
+        addAlertLog(`Asset index registry accepted target: ${newSymbol.toUpperCase()}`, 'system');
         setNewSymbol('');
-        pushAlert(`${cleanSymbol} locked into pipeline.`, 'success');
       } else {
-        pushAlert(data.detail, 'error');
+        const errData = await res.json();
+        addAlertLog(`Pipeline rejected asset: ${errData.detail}`, 'error');
       }
-    } catch (err) { pushAlert("Pipeline sync fault.", 'error'); }
+    } catch (err) {
+      addAlertLog('Asset inclusion processing error occurred.', 'error');
+    }
   };
 
-  const removeSymbolFromWatchlist = async (symbol: string) => {
+  const handleRemoveFromWatchlist = async (symbol: string) => {
     try {
-      const res = await fetch(`${API_BASE}/watchlist/remove`, {
+      const res = await fetch(`${BACKEND_URL}/api/watchlist/remove`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol })
+        body: JSON.stringify({ symbol }),
       });
-      const data = await res.json();
       if (res.ok) {
+        const data = await res.json();
         setWatchlist(data.watchlist);
-        pushAlert(`${symbol} cleared from monitoring stack.`, 'success');
+        addAlertLog(`Unsubscribed asset token matrix from pipeline: ${symbol}`, 'system');
       }
-    } catch (e) { pushAlert("Failed to clean tracking target.", 'error'); }
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const triggerFyersAuthAuthChannel = async () => {
-    if (!clientId || !secretKey) return pushAlert("Developer configuration array empty!", "error");
+  // 🎯 FIX: Explicitly sending client_id and secret_key for auth URL compilation
+  const handleGenerateAuthUrl = async () => {
+    if (!clientId || !secretKey) {
+      addAlertLog('App configuration fields missing required structures.', 'error');
+      return;
+    }
     try {
-      const res = await fetch(`${API_BASE}/fyers/auth`, {
+      const res = await fetch(`${BACKEND_URL}/api/fyers/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: clientId.trim(), secret_key: secretKey.trim(), redirect_url: redirectUrl })
+        body: JSON.stringify({
+          client_id: clientId.trim(),
+          secret_key: secretKey.trim(),
+          redirect_url: redirectUrl.trim()
+        }),
       });
-      const data = await res.json();
-      if (res.ok && data.auth_url) {
-        window.open(data.auth_url, '_blank');
-        pushAlert("Fyers authorization bridge triggered. Check popup.", "success");
-      } else {
-        pushAlert(data.detail || "Link compilation engine broken.", "error");
-      }
-    } catch { pushAlert("Security authorization handshake failure.", "error"); }
-  };
-
-  const processAppCodeRegistrationToken = async () => {
-    if (!manualAuthCode.trim()) return pushAlert("Authentication String core empty", "error");
-    try {
-      const res = await fetch(`${API_BASE}/fyers/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auth_code: manualAuthCode.trim(), client_id: clientId.trim(), secret_key: secretKey.trim() })
-      });
-      const data = await res.json();
       if (res.ok) {
+        const data = await res.json();
+        window.open(data.auth_url, '_blank');
+        setIsConfigSaved(true);
+        addAlertLog('Fyers secure verification frame routed out to external viewport.', 'system');
+      }
+    } catch (err) {
+      addAlertLog('Broker handshake architecture fail.', 'error');
+    }
+  };
+
+  // 🎯 FIX: Passing entire payload block to backend so client_id and secret match session
+  const handleSaveToken = async () => {
+    if (!manualAuthCode) {
+      addAlertLog('Verification code string required.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/fyers/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          auth_code: manualAuthCode.trim(),
+          client_id: clientId.trim(),
+          secret_key: secretKey.trim()
+        }),
+      });
+      if (res.ok) {
+        addAlertLog('Fyers master access registry saved. System live.', 'system');
         setFyersConnected(true);
         setManualAuthCode('');
-        pushAlert("Fyers execution channel validation passed successfully!", "success");
-        fetchSystemSettings(); // রিফ্রেশ স্টেট
       } else {
-        pushAlert(data.detail || "Handshake rejected.", "error");
+        const errData = await res.json();
+        addAlertLog(`Token synchronization denied: ${errData.detail}`, 'error');
       }
-    } catch { pushAlert("Network logic engine timeout.", "error"); }
+    } catch (err) {
+      addAlertLog('Token structural deployment fail.', 'error');
+    }
   };
 
-  const handleUpdateExecutionSettings = async (selectedOrderPlacement: string, selectedTimeframe: string) => {
-    try {
-      const res = await fetch(`${API_BASE}/settings/update`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order_placement: selectedOrderPlacement, timeframe: selectedTimeframe })
-      });
-      if (res.ok) {
-        setOrderPlacement(selectedOrderPlacement);
-        setTimeframe(selectedTimeframe);
-        pushAlert(`System runtime reconfigured [Mode: ${selectedOrderPlacement} | Frame: ${selectedTimeframe}]`, 'success');
-      }
-    } catch { pushAlert("Config push failure.", "error"); }
-  };
-
-  const toggleAutoScanPipeline = async () => {
-    const targets = autoScanStatus === 'ON' ? 'OFF' : 'ON';
-    try {
-      const res = await fetch(`${API_BASE}/settings/autoscan`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ auto_scan: targets })
-      });
-      if (res.ok) {
-        setAutoScanStatus(targets);
-        pushAlert(`Deep Strategy Engine: ${targets}`, 'success');
-      }
-    } catch { pushAlert("Pipeline controller lock dropped.", "error"); }
-  };
-
-  const executeStrategyBacktestSandbox = async () => {
+  const handleRunBacktest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsBacktesting(true);
     setBacktestResult(null);
     try {
-      const res = await fetch(`${API_BASE}/backtest`, {
+      const res = await fetch(`${BACKEND_URL}/api/backtest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: btSymbol, strategy: btStrategy, duration_months: btDuration, timeframe: btTimeframe })
+        body: JSON.stringify({
+          symbol: btSymbol,
+          strategy: btStrategy,
+          duration_months: btDuration,
+          timeframe: btTimeframe,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
         setBacktestResult(data);
-        pushAlert("Sandbox backtest computation matrix fully resolved.", "success");
+        addAlertLog(`Quant verification compilation ready for ${btSymbol} utilizing ${btStrategy}.`, 'system');
       } else {
-        pushAlert("Matrix processing engine validation error.", "error");
+        const errData = await res.json();
+        addAlertLog(`Compilation dropped: ${errData.detail}`, 'error');
       }
-    } catch { pushAlert("Backtest deployment target unresolvable.", "error"); }
+    } catch (err) {
+      addAlertLog('Backtest telemetry module framework timed out.', 'error');
+    } finally {
+      setIsBacktesting(false);
+    }
   };
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-black flex items-center justify-center font-sans antialiased text-gray-200 p-4 selection:bg-cyan-500/30">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(16,185,129,0.08)_0,transparent_65%)]" />
-        <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 p-8 rounded-2xl relative shadow-2xl backdrop-blur-md">
-          <div className="text-center mb-8">
-            <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">⚡ APEX QUANT SYSTEM</h1>
-            <p className="text-xs text-zinc-500 mt-1 uppercase tracking-widest">Enterprise Terminal Verification Gateway</p>
+      <div className="min-h-screen bg-black text-zinc-100 flex items-center justify-center font-mono selection:bg-zinc-800 selection:text-white p-4">
+        <div className="absolute inset-0 bg-[radial-gradient(#111_1px,transparent_1px)] [background-size:16px_16px] opacity-40 pointer-events-none"></div>
+        <div className="w-full max-w-md bg-zinc-950/60 backdrop-blur-md border border-zinc-900 rounded-xl p-8 relative shadow-2xl">
+          <div className="flex items-center space-x-3 mb-8">
+            <div className="w-3 h-3 bg-cyan-500 rounded-full animate-pulse"></div>
+            <h1 className="text-sm font-bold tracking-widest text-zinc-400">APEX QUANT SECURITY</h1>
           </div>
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} className="space-y-6">
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-zinc-400 font-bold mb-1.5">System Username</label>
-              <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-emerald-500 font-mono" placeholder="admin" required />
+              <label className="block text-[10px] text-zinc-500 uppercase tracking-widest mb-2 font-bold">OPERATOR IDENTIFIER</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-zinc-900/40 border border-zinc-800/80 rounded-lg px-4 py-3 text-xs focus:outline-none focus:border-zinc-700 transition-colors text-zinc-200"
+                placeholder="root_id"
+                required
+              />
             </div>
             <div>
-              <label className="block text-[10px] uppercase tracking-wider text-zinc-400 font-bold mb-1.5">System Security Token</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-zinc-100 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-emerald-500 font-mono" placeholder="••••••••" required />
+              <label className="block text-[10px] text-zinc-500 uppercase tracking-widest mb-2 font-bold">BYPASS KEYWORD</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-zinc-900/40 border border-zinc-800/80 rounded-lg px-4 py-3 text-xs focus:outline-none focus:border-zinc-700 transition-colors text-zinc-200"
+                placeholder="••••••••"
+                required
+              />
             </div>
-            {authError && <p className="text-xs text-red-400 bg-red-950/40 border border-red-900/50 p-2.5 rounded-lg font-medium">{authError}</p>}
-            <button type="submit" className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-black font-bold py-2.5 rounded-lg text-sm tracking-wide transition-all shadow-lg shadow-emerald-950/20">Initialize Control Shell</button>
+            {authError && <p className="text-[11px] text-red-400 font-mono bg-red-950/10 border border-red-900/40 p-3 rounded-lg">{authError}</p>}
+            <button
+              type="submit"
+              className="w-full bg-zinc-100 hover:bg-white text-black font-bold py-3 px-4 rounded-lg text-xs tracking-wider transition-colors uppercase"
+            >
+              Initialize Node
+            </button>
           </form>
         </div>
       </div>
@@ -350,281 +402,384 @@ export default function AlgoTradingApp() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-zinc-100 font-sans antialiased flex flex-col selection:bg-cyan-500/20">
-      <header className="border-b border-zinc-800 bg-zinc-950/70 backdrop-blur px-6 py-4 sticky top-0 z-40 flex flex-col md:flex-row justify-between items-center gap-4">
-        <div className="flex items-center gap-3">
-          <div className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
-          <div>
-            <h1 className="text-lg font-black tracking-tight text-white flex items-center gap-2">⚡ APEX QUANT <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-0.5 rounded border border-zinc-700 font-mono uppercase tracking-normal">Enterprise v3.1</span></h1>
-          </div>
+    <div className="min-h-screen bg-black text-zinc-100 font-mono flex flex-col antialiased selection:bg-zinc-800 selection:text-white">
+      {/* Top Console Bar */}
+      <header className="border-b border-zinc-900 bg-zinc-950/40 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center space-x-3">
+          <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping"></div>
+          <h1 className="text-xs font-black tracking-widest text-zinc-200 uppercase">APEX QUANT // ENTERPRISE TERMINAL PRO</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <button onClick={toggleAutoScanPipeline} className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold border transition-all ${autoScanStatus === 'ON' ? 'bg-emerald-950/30 text-emerald-400 border-emerald-800' : 'bg-zinc-900 text-zinc-400 border-zinc-800'}`}>
-            STRATEGY SCANNER: {autoScanStatus}
-          </button>
-          <div className="flex bg-zinc-900 border border-zinc-800 rounded-lg p-0.5 text-xs font-mono">
-            <button onClick={() => handleUpdateExecutionSettings('OFF', timeframe)} className={`px-2.5 py-1 rounded-md transition-all font-bold ${orderPlacement === 'OFF' ? 'bg-zinc-800 text-amber-400 border border-zinc-700 shadow-sm' : 'text-zinc-500'}`}>LOG ENTRY ONLY</button>
-            <button onClick={() => handleUpdateExecutionSettings('ON', timeframe)} className={`px-2.5 py-1 rounded-md transition-all font-bold ${orderPlacement === 'ON' ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-950/30' : 'text-zinc-500'}`}>AUTO TRADING ACTIVE</button>
+        <div className="flex flex-wrap items-center gap-3 text-[11px]">
+          <div className={`px-3 py-1.5 rounded-md border flex items-center space-x-2 ${fyersConnected ? 'bg-emerald-950/20 border-emerald-900/50 text-emerald-400' : 'bg-red-950/20 border-red-900/50 text-red-400'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${fyersConnected ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
+            <span className="font-bold tracking-wider">FYERS PIPELINE: {fyersConnected ? 'ONLINE' : 'DISCONNECTED'}</span>
           </div>
-          <select value={timeframe} onChange={(e) => handleUpdateExecutionSettings(orderPlacement, e.target.value)} className="bg-zinc-900 border border-zinc-800 text-zinc-300 rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:border-cyan-500">
-            <option value="1m">1 Minute</option>
-            <option value="5m">5 Minutes</option>
-            <option value="15m">15 Minutes</option>
-            <option value="1h">1 Hour</option>
-          </select>
-          <button onClick={() => setShowAlertModal(true)} className="relative p-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 transition-all">
-            🔔 {alertLogs.length > 0 && <span className="absolute -top-1 -right-1 h-4 w-4 bg-red-500 text-[10px] text-white font-black rounded-full flex items-center justify-center animate-bounce">{alertLogs.length}</span>}
+          <button
+            onClick={() => setIsAlertDrawerOpen(true)}
+            className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 px-3 py-1.5 rounded-md transition-all flex items-center space-x-2 font-bold relative"
+          >
+            <span>CONSOLE BUFFER</span>
+            {alertLogs.length > 0 && (
+              <span className="bg-cyan-500 text-black text-[9px] font-extrabold px-1 rounded min-w-[14px] text-center">{alertLogs.length}</span>
+            )}
           </button>
         </div>
       </header>
 
-      <main className="flex-1 grid grid-cols-1 xl:grid-cols-4 p-6 gap-6 max-w-[1600px] w-full mx-auto">
-        <div className="xl:col-span-1 space-y-6">
-          <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
-            <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider flex justify-between items-center font-mono">
-              Broker Configuration Link
-              <span className={`h-2 w-2 rounded-full ${fyersConnected ? 'bg-emerald-400' : 'bg-red-500'}`} />
-            </h3>
-
-            {!isConfigSaved ? (
-              <form onSubmit={saveDeveloperConfig} className="space-y-3">
-                <input type="text" placeholder="Fyers Client ID" value={clientId} onChange={e => setClientId(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500" required />
-                <input type="password" placeholder="Fyers Secret Key" value={secretKey} onChange={e => setSecretKey(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500" required />
-                <button type="submit" className="w-full bg-zinc-800 hover:bg-zinc-700 text-xs font-mono font-bold py-2 rounded-lg transition-all">Save Vault Access Keys</button>
-              </form>
-            ) : (
-              <div className="space-y-3">
-                <div className="p-3 bg-zinc-900/50 rounded-lg border border-zinc-800 text-xs font-mono text-zinc-400 space-y-1">
-                  <p>Client ID: <span className="text-zinc-200">{clientId.substring(0,6)}...</span></p>
-                  <p>Redirect: <span className="text-zinc-500 break-all text-[10px]">{redirectUrl}</span></p>
-                </div>
-                {!fyersConnected ? (
-                  <div className="space-y-2">
-                    <button onClick={triggerFyersAuthAuthChannel} className="w-full bg-cyan-600 hover:bg-cyan-500 text-black text-xs font-mono font-bold py-2 rounded-lg transition-all">1. Extract Access Code</button>
-                    <div className="flex gap-2">
-                      <input type="text" placeholder="Paste return Auth Code" value={manualAuthCode} onChange={e => setManualAuthCode(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-emerald-500" />
-                      <button onClick={processAppCodeRegistrationToken} className="bg-emerald-600 hover:bg-emerald-500 text-black text-xs font-mono font-bold px-3 py-2 rounded-lg transition-all">2. Verify</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-3 bg-emerald-950/20 border border-emerald-800/60 rounded-lg text-center">
-                    <span className="text-xs text-emerald-400 font-mono font-bold">✓ Fyers Core Engine Fully Hooked</span>
-                  </div>
-                )}
-                <button onClick={() => setIsConfigSaved(false)} className="w-full text-zinc-500 hover:text-zinc-400 text-[10px] font-mono text-right block transition-all">Modify API Secret Arrays</button>
+      {/* Main Framework Grid */}
+      <main className="flex-1 p-6 grid grid-cols-1 xl:grid-cols-12 gap-6 max-w-[1600px] w-full mx-auto">
+        
+        {/* Left Control Cluster (4 Columns) */}
+        <div className="xl:col-span-4 space-y-6">
+          
+          {/* API Pipeline Hardware Setup */}
+          <section className="bg-zinc-950/40 border border-zinc-900 rounded-xl p-5 relative overflow-hidden">
+            <h2 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-4 flex items-center justify-between">
+              <span>BROKER TELEMETRY PROTOCOL</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500">v3 API CORE</span>
+            </h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-1.5">APP CLIENT ID</label>
+                <input
+                  type="text"
+                  value={clientId}
+                  onChange={(e) => setClientId(e.target.value)}
+                  disabled={fyersConnected}
+                  className="w-full bg-zinc-900/30 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-zinc-700 transition-colors text-zinc-300 disabled:opacity-50"
+                  placeholder="Insert Fyers Client ID"
+                />
               </div>
-            )}
-          </div>
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-1.5">APP SECRET KEY</label>
+                <input
+                  type="password"
+                  value={secretKey}
+                  onChange={(e) => setSecretKey(e.target.value)}
+                  disabled={fyersConnected}
+                  className="w-full bg-zinc-900/30 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-zinc-700 transition-colors text-zinc-300 disabled:opacity-50"
+                  placeholder="••••••••••••••••"
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-1.5">REDIRECT SECURE DEPLOYMENT ENDPOINT</label>
+                <input
+                  type="text"
+                  value={redirectUrl}
+                  onChange={(e) => setRedirectUrl(e.target.value)}
+                  disabled={fyersConnected}
+                  className="w-full bg-zinc-900/30 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-500 bg-zinc-950/20 disabled:opacity-50"
+                  readOnly
+                />
+              </div>
+              
+              {!fyersConnected && (
+                <div className="pt-2 space-y-3 border-t border-zinc-900">
+                  <button
+                    onClick={handleGenerateAuthUrl}
+                    className="w-full bg-zinc-900 hover:bg-zinc-800 text-zinc-200 font-bold py-2 px-4 border border-zinc-800 rounded-lg text-xs tracking-wider transition-colors uppercase"
+                  >
+                    Request Secure Handshake URL
+                  </button>
+                  {isConfigSaved && (
+                    <div className="space-y-2 animate-fadeIn">
+                      <label className="block text-[9px] text-cyan-400 uppercase font-bold tracking-wider mb-1.5">RETURNED AUTHORIZATION STRING</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={manualAuthCode}
+                          onChange={(e) => setManualAuthCode(e.target.value)}
+                          className="flex-1 bg-zinc-900/60 border border-cyan-900/60 rounded-lg px-3 py-2 text-xs text-cyan-400 placeholder-cyan-800 focus:outline-none"
+                          placeholder="Paste generated token string"
+                        />
+                        <button
+                          onClick={handleSaveToken}
+                          className="bg-cyan-500 hover:bg-cyan-400 text-black font-black px-4 rounded-lg text-xs uppercase tracking-wider transition-colors"
+                        >
+                          Mount
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
 
-          <div className="bg-zinc-950 border border-zinc-800 p-5 rounded-xl space-y-4">
-            <h3 className="text-xs uppercase font-bold text-zinc-400 tracking-wider font-mono">Dynamic Portfolio Monitor</h3>
-            <form onSubmit={addSymbolToWatchlist} className="flex gap-2">
-              <input type="text" placeholder="e.g. NSE:SBIN-EQ" value={newSymbol} onChange={e => setNewSymbol(e.target.value)} className="flex-1 bg-zinc-900 border border-zinc-800 text-xs font-mono rounded-lg px-3 py-2 text-zinc-100 focus:outline-none focus:border-cyan-500 uppercase" />
-              <button type="submit" className="bg-zinc-800 hover:bg-zinc-700 text-xs font-mono px-3 py-2 rounded-lg font-bold transition-all">+</button>
-            </form>
+          {/* Engine Parameters Console */}
+          <section className="bg-zinc-950/40 border border-zinc-900 rounded-xl p-5">
+            <h2 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-4">CRITICAL EXECUTION POLICIES</h2>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-zinc-900/30 border border-zinc-900">
+                <div>
+                  <h3 className="text-xs font-bold text-zinc-300">AUTOMATED TELEMETRY SCANNING</h3>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">Continuous signal analysis matrix loop.</p>
+                </div>
+                <button
+                  onClick={toggleAutoScan}
+                  className={`px-3 py-1 rounded text-[10px] font-black transition-all border ${autoScan === 'ON' ? 'bg-cyan-950/30 border-cyan-800/80 text-cyan-400' : 'bg-zinc-900 border-zinc-800 text-zinc-500'}`}
+                >
+                  {autoScan}
+                </button>
+              </div>
 
-            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-2">INTEGRATED STRATEGY TIMEFRAME</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {['1m', '5m', '15m', '1d'].map((tf) => (
+                    <button
+                      key={tf}
+                      onClick={() => handleUpdateSettings(orderPlacement, tf)}
+                      className={`py-1.5 rounded text-xs font-mono border transition-all ${timeframe === tf ? 'bg-zinc-100 border-zinc-100 text-black font-bold' : 'bg-zinc-900/40 border-zinc-800/60 text-zinc-400 hover:bg-zinc-900'}`}
+                    >
+                      {tf}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-2">BROKER DEPLOYMENT DISPATCH</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => handleUpdateSettings('OFF', timeframe)}
+                    className={`py-2 rounded text-xs border transition-all font-bold ${orderPlacement === 'OFF' ? 'bg-red-950/20 border-red-900/60 text-red-400' : 'bg-zinc-900/40 border-zinc-800/60 text-zinc-500 hover:bg-zinc-900'}`}
+                  >
+                    PAPER MODAL
+                  </button>
+                  <button
+                    onClick={() => handleUpdateSettings('ON', timeframe)}
+                    className={`py-2 rounded text-xs border transition-all font-bold ${orderPlacement === 'ON' ? 'bg-emerald-950/20 border-emerald-900/60 text-emerald-400' : 'bg-zinc-900/40 border-zinc-800/60 text-zinc-500 hover:bg-zinc-900'}`}
+                  >
+                    LIVE TRADING
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        {/* Center/Right Main Array Grid (8 Columns) */}
+        <div className="xl:col-span-8 space-y-6">
+          
+          {/* Watchlist array & Real-Time ticks */}
+          <section className="bg-zinc-950/40 border border-zinc-900 rounded-xl p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+              <h2 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">REAL-TIME RISK MONITOR PIPELINE</h2>
+              <form onSubmit={handleAddToWatchlist} className="flex gap-2 w-full sm:w-auto">
+                <input
+                  type="text"
+                  value={newSymbol}
+                  onChange={(e) => setNewSymbol(e.target.value)}
+                  className="bg-zinc-900/60 border border-zinc-800/80 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-zinc-700 text-zinc-200 uppercase font-mono tracking-wider placeholder:lowercase w-full sm:w-48"
+                  placeholder="e.g. nse:tcs-eq"
+                />
+                <button
+                  type="submit"
+                  className="bg-zinc-100 hover:bg-white text-black text-xs font-bold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  ADD ASSET
+                </button>
+              </form>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {watchlist.length === 0 ? (
-                <p className="text-xs font-mono text-zinc-600 text-center py-4">Watchlist stream is empty.</p>
+                <div className="col-span-full border border-dashed border-zinc-800 rounded-xl py-12 text-center text-xs text-zinc-600">
+                  Risk array is dry. Zero data loops mapped.
+                </div>
               ) : (
                 watchlist.map((symbol) => {
-                  const data = livePrices[symbol] || { price: 0.00, change: 0, direction: 'neutral' };
+                  const data = livePrices[symbol] || { price: 0, change: 0, direction: 'neutral' };
                   return (
-                    <div key={symbol} className="flex items-center justify-between p-3 bg-zinc-900/40 rounded-lg border border-zinc-800/80 hover:border-zinc-700 transition-all">
-                      <div className="max-w-[65%]">
-                        <p className="text-xs font-bold font-mono truncate text-zinc-200">{symbol.split(':')[1] || symbol}</p>
-                        <p className="text-[10px] font-mono text-zinc-500 truncate">{symbol.split(':')[0]}</p>
-                      </div>
-                      <div className="text-right flex items-center gap-3">
-                        <div>
-                          <p className={`text-xs font-mono font-bold transition-all ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
-                            ₹{data.price.toFixed(2)}
-                          </p>
-                          <p className={`text-[9px] font-mono ${(data.change ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                            {(data.change ?? 0) >= 0 ? '+' : ''}{(data.change ?? 0).toFixed(2)}%
-                          </p>
+                    <div
+                      key={symbol}
+                      className={`p-4 rounded-xl border transition-all flex items-center justify-between ${data.direction === 'up' ? 'bg-emerald-950/5 border-emerald-900/30' : data.direction === 'down' ? 'bg-red-950/5 border-red-900/30' : 'bg-zinc-900/20 border-zinc-900'}`}
+                    >
+                      <div className="space-y-1">
+                        <div className="text-xs font-bold tracking-wide text-zinc-200 uppercase">{symbol}</div>
+                        <div className={`text-[10px] font-mono ${data.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {data.change >= 0 ? '+' : ''}{data.change?.toFixed(2)}% TODAY
                         </div>
-                        <button onClick={() => removeSymbolFromWatchlist(symbol)} className="text-zinc-600 hover:text-red-400 text-xs transition-all font-mono">×</button>
+                      </div>
+                      <div className="flex items-center space-x-4">
+                        <div className="text-right font-mono">
+                          <span className={`text-sm font-bold tracking-tight ${data.direction === 'up' ? 'text-emerald-400' : data.direction === 'down' ? 'text-red-400' : 'text-zinc-300'}`}>
+                            {data.price > 0 ? data.price.toFixed(2) : '0.00'}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleRemoveFromWatchlist(symbol)}
+                          className="text-zinc-600 hover:text-red-400 text-xs font-mono transition-colors p-1"
+                        >
+                          ×
+                        </button>
                       </div>
                     </div>
                   );
                 })
               )}
             </div>
-          </div>
-        </div>
+          </section>
 
-        <div className="xl:col-span-3 bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col overflow-hidden">
-          <div className="border-b border-zinc-800 bg-zinc-900/40 p-2 flex gap-2">
-            <button onClick={() => setActiveTab('live-logs')} className={`px-4 py-2 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'live-logs' ? 'bg-zinc-800 text-white border border-zinc-700 shadow-inner' : 'text-zinc-400 hover:text-zinc-200'}`}>
-              Execution Log Pipeline
-            </button>
-            <button onClick={() => setActiveTab('backtest-sandbox')} className={`px-4 py-2 rounded-lg text-xs font-mono font-bold transition-all ${activeTab === 'backtest-sandbox' ? 'bg-zinc-800 text-white border border-zinc-700 shadow-inner' : 'text-zinc-400 hover:text-zinc-200'}`}>
-              Deep Strategy Sandbox (Backtest)
-            </button>
-          </div>
-
-          <div className="p-6 flex-1 overflow-y-auto">
-            {activeTab === 'live-logs' ? (
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h2 className="text-xs font-mono uppercase tracking-wider font-bold text-zinc-400">Live Telemetry Pipeline Engine</h2>
-                  <span className="text-[10px] font-mono text-zinc-500">Auto Refreshing Live Stack via WebSocket</span>
-                </div>
-
-                <div className="overflow-x-auto rounded-xl border border-zinc-800/80">
-                  <table className="w-full text-left border-collapse text-xs font-mono">
-                    <thead>
-                      <tr className="bg-zinc-900 text-zinc-400 uppercase tracking-wider font-bold text-[10px] border-b border-zinc-800">
-                        <th className="p-3.5">Timestamp</th>
-                        <th className="p-3.5">Trading Target</th>
-                        <th className="p-3.5">Matched Rule</th>
-                        <th className="p-3.5">Frame</th>
-                        <th className="p-3.5">Action Block</th>
-                        <th className="p-3.5">Base LTP</th>
-                        <th className="p-3.5">Absolute Net PnL</th>
-                        <th className="p-3.5">System Status</th>
+          {/* Quant Engine Signal Calls Feed */}
+          <section className="bg-zinc-950/40 border border-zinc-900 rounded-xl p-5">
+            <h2 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-4">ENGINE SYSTEM HISTORICAL DISPATCHES</h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-zinc-900 text-[10px] text-zinc-500 uppercase tracking-wider">
+                    <th className="pb-3 font-bold">STAMP</th>
+                    <th className="pb-3 font-bold">ASSET</th>
+                    <th className="pb-3 font-bold">STRATEGY LAYER</th>
+                    <th className="pb-3 font-bold">TF</th>
+                    <th className="pb-3 font-bold">ACTION</th>
+                    <th className="pb-3 font-bold text-right">ENTRY</th>
+                    <th className="pb-3 font-bold text-right">TARGET / SL</th>
+                    <th className="pb-3 font-bold text-right">DISPATCH</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-900/40">
+                  {callsHistory.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-zinc-600 text-xs">
+                        System telemetry pipeline waiting for trigger configurations.
+                      </td>
+                    </tr>
+                  ) : (
+                    callsHistory.map((call) => (
+                      <tr key={call.id} className="hover:bg-zinc-900/20 transition-colors">
+                        <td className="py-3.5 text-zinc-500 font-medium">{call.timestamp}</td>
+                        <td className="py-3.5 font-bold text-zinc-200 uppercase">{call.symbol}</td>
+                        <td className="py-3.5 text-zinc-400">{call.strategy}</td>
+                        <td className="py-3.5"><span className="bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 rounded text-[10px]">{call.timeframe}</span></td>
+                        <td className="py-3.5">
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${call.type === 'BUY' ? 'bg-emerald-950/30 text-emerald-400 border border-emerald-900/40' : 'bg-red-950/30 text-red-400 border border-red-900/40'}`}>
+                            {call.type}
+                          </span>
+                        </td>
+                        <td className="py-3.5 text-right font-bold text-zinc-300">{call.entry_price.toFixed(2)}</td>
+                        <td className="py-3.5 text-right font-mono text-[11px]">
+                          <div className="text-emerald-500 font-bold">T: {call.target.toFixed(2)}</div>
+                          <div className="text-red-400 font-medium">S: {call.sl.toFixed(2)}</div>
+                        </td>
+                        <td className="py-3.5 text-right">
+                          <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded ${call.status === 'SUCCESS' ? 'bg-emerald-500 text-black' : 'bg-amber-500/10 text-amber-400 border border-amber-900/30'}`}>
+                            {call.status}
+                          </span>
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-900/60 bg-black/20">
-                      {callHistory.length === 0 ? (
-                        <tr>
-                          <td colSpan={8} className="p-8 text-center text-zinc-600 font-mono">No telemetry logic cycles executed in current container session yet.</td>
-                        </tr>
-                      ) : (
-                        callHistory.map((log) => (
-                          <tr key={log.id} className="hover:bg-zinc-900/30 transition-colors">
-                            <td className="p-3.5 text-zinc-500 whitespace-nowrap">{log.timestamp}</td>
-                            <td className="p-3.5 font-bold text-zinc-200">{log.symbol}</td>
-                            <td className="p-3.5"><span className="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-400 border border-cyan-900/60 text-[11px]">{log.strategy}</span></td>
-                            <td className="p-3.5 text-zinc-400">{log.timeframe || '5m'}</td>
-                            <td className="p-3.5">
-                              <span className={`font-black uppercase text-[11px] ${log.type === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
-                                {log.type}
-                              </span>
-                            </td>
-                            <td className="p-3.5 text-zinc-300 font-bold">₹{log.entry_price.toFixed(2)}</td>
-                            <td className={`p-3.5 font-bold ${log.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                              {log.pnl >= 0 ? '+' : ''}₹{log.pnl.toLocaleString('en-IN')}
-                            </td>
-                            <td className="p-3.5">
-                              <span className={`inline-flex items-center gap-1.5 font-bold uppercase text-[10px] ${log.status === 'SUCCESS' ? 'text-emerald-400' : log.status === 'PENDING' ? 'text-amber-400' : 'text-red-500'}`}>
-                                <span className={`h-1.5 w-1.5 rounded-full ${log.status === 'SUCCESS' ? 'bg-emerald-400' : log.status === 'PENDING' ? 'bg-amber-400' : 'bg-red-500'}`} />
-                                {log.status}
-                              </span>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Deep Analytics Backtest Layer */}
+          <section className="bg-zinc-950/40 border border-zinc-900 rounded-xl p-5">
+            <h2 className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest mb-4">DEEP HEURISTIC BACKTEST VERIFIER</h2>
+            <form onSubmit={handleRunBacktest} className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 items-end mb-6">
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-1.5">TARGET SYMBOL</label>
+                <input
+                  type="text"
+                  value={btSymbol}
+                  onChange={(e) => setBtSymbol(e.target.value.toUpperCase())}
+                  className="w-full bg-zinc-900/40 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono uppercase text-zinc-200"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-1.5">STRATEGY PATTERN</label>
+                <select
+                  value={btStrategy}
+                  onChange={(e) => setBtStrategy(e.target.value)}
+                  className="w-full bg-zinc-900/40 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-300 focus:outline-none"
+                >
+                  <option value="EMA_Crossover_9_21">EMA Crossover 9/21</option>
+                  <option value="RSI_Oversold_30">RSI Oversold 30</option>
+                  <option value="Supertrend_Buy">Supertrend Buy (7,3)</option>
+                  <option value="MACD_Bullish_Cross">MACD Bullish Cross</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[9px] text-zinc-500 uppercase font-bold tracking-wider mb-1.5">DURATION & TIMEFRAME</label>
+                <div className="flex gap-2">
+                  <select
+                    value={btDuration}
+                    onChange={(e) => setBtDuration(Number(e.target.value))}
+                    className="flex-1 bg-zinc-900/40 border border-zinc-800 rounded-lg px-2 py-2 text-xs font-mono text-zinc-300"
+                  >
+                    <option value={1}>1 Month</option>
+                    <option value={3}>3 Months</option>
+                    <option value={6}>6 Months</option>
+                  </select>
+                  <select
+                    value={btTimeframe}
+                    onChange={(e) => setBtTimeframe(e.target.value)}
+                    className="flex-1 bg-zinc-900/40 border border-zinc-800 rounded-lg px-2 py-2 text-xs font-mono text-zinc-300"
+                  >
+                    <option value="1m">1m</option>
+                    <option value="5m">5m</option>
+                    <option value="15m">15m</option>
+                  </select>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-xs font-mono uppercase tracking-wider font-bold text-zinc-400 mb-1">Deep Strategy Backtest Compute Unit</h2>
-                  <p className="text-xs text-zinc-500">Run parallel offline historical simulation on options/equities arrays.</p>
-                </div>
+              <button
+                type="submit"
+                disabled={isBacktesting}
+                className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:bg-zinc-800 text-black font-black py-2 px-4 rounded-lg text-xs tracking-wider transition-all uppercase"
+              >
+                {isBacktesting ? 'COMPILING...' : 'RUN VERIFICATION'}
+              </button>
+            </form>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-5 bg-zinc-900/30 rounded-xl border border-zinc-800">
-                  <div>
-                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Target Asset Token</label>
-                    <input type="text" value={btSymbol} onChange={e => setBtSymbol(e.target.value)} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500 uppercase" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Strategy Logic Module</label>
-                    <select value={btStrategy} onChange={e => setBtStrategy(e.target.value)} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500">
-                      <option value="EMA_Crossover_9_21">EMA Crossover (9/21)</option>
-                      <option value="RSI_Oversold_30">RSI Oversold Filter (30)</option>
-                      <option value="Supertrend_Buy">Supertrend Wave Rider (7,3)</option>
-                      <option value="MACD_Bullish_Cross">MACD Bullish Cross Engine</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Evaluation Window</label>
-                    <select value={btDuration} onChange={e => setBtDuration(Number(e.target.value))} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500">
-                      <option value={1}>1 Month Window</option>
-                      <option value={2}>2 Months Window</option>
-                      <option value={3}>3 Months Window</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5 font-mono">Resolution Frame</label>
-                    <select value={btTimeframe} onChange={e => setBtTimeframe(e.target.value)} className="w-full bg-black border border-zinc-800 text-xs font-mono text-zinc-200 px-3 py-2 rounded-lg focus:outline-none focus:border-cyan-500">
-                      <option value="1m">1 Minute Matrix</option>
-                      <option value="5m">5 Minutes Matrix</option>
-                      <option value="15m">15 Minutes Matrix</option>
-                    </select>
-                  </div>
-                  <div className="md:col-span-4 pt-2">
-                    <button onClick={executeStrategyBacktestSandbox} className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-black font-black font-mono text-xs py-2.5 rounded-lg tracking-wide transition-all shadow-lg shadow-cyan-950/20">Compile & Execute Sandbox Run Matrix</button>
+            {backtestResult && (
+              <div className="border border-zinc-900 bg-zinc-900/10 rounded-xl p-5 grid grid-cols-2 sm:grid-cols-4 gap-4 font-mono animate-fadeIn">
+                <div className="space-y-1">
+                  <div className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">WIN/LOSS GENERATED</div>
+                  <div className="text-xs font-bold text-zinc-200">
+                    <span className="text-emerald-400">{backtestResult.won}W</span> / <span className="text-red-400">{backtestResult.lost}L</span>
                   </div>
                 </div>
-
-                {backtestResult && (
-                  <div className="space-y-4 animate-fadeIn">
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-zinc-900/50 rounded-xl border border-zinc-800/80 font-mono text-xs">
-                      <div>
-                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Timeline Checked</p>
-                        <p className="text-sm font-bold text-cyan-400">{backtestResult.duration_tested || `${btDuration} Month(s)`}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Initial Capital</p>
-                        <p className="text-sm font-bold text-zinc-300">₹{backtestResult.initial_balance.toLocaleString('en-IN')}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Completed Cycles</p>
-                        <p className="text-sm font-bold text-purple-400">{backtestResult.total_trades}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Win Efficiency</p>
-                        <p className="text-sm font-bold text-amber-400">{backtestResult.win_rate}</p>
-                      </div>
-                      <div>
-                        <p className="text-[10px] text-zinc-500 uppercase mb-0.5">Net Generated Yield</p>
-                        <p className={`text-sm font-bold ${backtestResult.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {backtestResult.net_profit >= 0 ? '+' : ''}₹{backtestResult.net_profit.toLocaleString('en-IN')}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-zinc-900/40 p-4 rounded-lg border border-zinc-800">
-                      <div className="flex justify-between items-center border-b md:border-b-0 md:border-r border-zinc-800 pb-2 md:pb-0 md:pr-4">
-                        <span className="text-xs text-zinc-400">✅ Won Cycles:</span>
-                        <span className="text-sm font-black text-emerald-400">{backtestResult.won} Trades</span>
-                      </div>
-                      <div className="flex justify-between items-center border-b md:border-b-0 md:border-r border-zinc-800 pb-2 md:pb-0 md:px-4">
-                        <span className="text-xs text-zinc-400">❌ Lost Cycles:</span>
-                        <span className="text-sm font-black text-red-400">{backtestResult.lost} Trades</span>
-                      </div>
-                      <div className="flex justify-between items-center md:pl-4">
-                        <span className="text-xs text-zinc-400">💰 Net generated Profit:</span>
-                        <span className="text-sm font-black text-emerald-400">₹{backtestResult.net_profit.toLocaleString('en-IN')}</span>
-                      </div>
-                    </div>
+                <div className="space-y-1">
+                  <div className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">WIN PROBABILITY RATE</div>
+                  <div className="text-xs font-bold text-cyan-400">{backtestResult.win_rate}</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">TOTAL TRADES EXECUTED</div>
+                  <div className="text-xs font-bold text-zinc-300">{backtestResult.total_trades} Matrix Positions</div>
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[9px] text-zinc-500 uppercase font-bold tracking-wider">NET SIMULATION YIELD</div>
+                  <div className={`text-xs font-black ${backtestResult.net_profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    ₹{backtestResult.net_profit.toLocaleString()}
                   </div>
-                )}
+                </div>
               </div>
             )}
-          </div>
+          </section>
         </div>
       </main>
 
-      {showAlertModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="w-full max-w-2xl bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col max-h-[80vh] shadow-2xl">
-            <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/20">
-              <h3 className="text-xs uppercase font-bold tracking-wider text-zinc-400 font-mono">System Signal & Error Runtime Log Buffer</h3>
-              <button onClick={() => setShowAlertModal(false)} className="text-zinc-500 hover:text-white text-sm font-mono font-bold transition-colors">×</button>
+      {/* Floating System Buffer Drawer */}
+      {isAlertDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-md bg-zinc-950 border-l border-zinc-900 h-full flex flex-col font-mono shadow-2xl">
+            <div className="p-4 border-b border-zinc-900 bg-zinc-900/20 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></div>
+                <h3 className="text-xs font-black tracking-widest text-zinc-300 uppercase">SYSTEM DIAGNOSTIC STREAM</h3>
+              </div>
+              <button onClick={() => setIsAlertDrawerOpen(false)} className="text-zinc-500 hover:text-white text-sm font-mono font-bold transition-colors">×</button>
             </div>
             <div className="p-4 overflow-y-auto space-y-2 flex-1 bg-black/40">
               {alertLogs.length === 0 ? (
                 <p className="text-xs font-mono text-zinc-600 text-center py-8">Buffer registry is entirely empty.</p>
               ) : (
                 alertLogs.map((log) => (
-                  <div key={log.id} className={`p-3 rounded-lg border text-xs font-mono transition-all ${log.type === 'error' ? 'bg-red-950/20 text-red-400 border-red-900/60' : log.type === 'signal' ? 'bg-cyan-950/30 text-cyan-400 border-cyan-800/60 animate-pulse' : 'bg-zinc-900/60 text-emerald-400 border-zinc-800'}`}>
-                    <div className="flex justify-between text-[10px] text-zinc-500 mb-1">
+                  <div key={log.id} className={`p-3 rounded-lg border text-xs font-mono transition-all ${log.type === 'error' ? 'bg-red-950/20 text-red-400 border-red-900/60' : log.type === 'signal' ? 'bg-cyan-950/30 text-cyan-400 border-cyan-800/60 animate-pulse' : 'bg-zinc-900/60 text-emerald-400 border-zinc-800'}`}>\n                    <div className="flex justify-between text-[10px] text-zinc-500 mb-1">
                       <span>{log.type.toUpperCase()} CAPTURE LOG</span>
                       <span>{new Date(log.id).toLocaleTimeString()}</span>
                     </div>
@@ -634,7 +789,12 @@ export default function AlgoTradingApp() {
               )}
             </div>
             <div className="p-3 border-t border-zinc-800 bg-zinc-900/30 flex justify-end">
-              <button onClick={() => { setAlertLogs([]); setShowAlertModal(false); }} className="text-zinc-500 hover:text-red-400 text-[11px] font-mono transition-all">Clear Event Memory Core</button>
+              <button
+                onClick={() => setAlertLogs([])}
+                className="bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 text-[10px] font-bold py-1 px-2.5 rounded transition-colors"
+              >
+                FLUSH RECOGNITIONS
+              </button>
             </div>
           </div>
         </div>
