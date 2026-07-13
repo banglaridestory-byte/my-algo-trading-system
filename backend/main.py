@@ -18,7 +18,7 @@ except ImportError:
     strategies = DummyStrategies()
 
 from fyers_apiv3 import fyersModel
-from fyers_apiv3.FyersWebsocket import fyersModelws
+from fyers_apiv3.FyersWebsocket import data_ws
 
 app = FastAPI(title="⚡ APEX QUANT Enterprise Terminal Pro")
 
@@ -99,8 +99,8 @@ def on_ticker_open():
 async def initialize_fyers_websocket(access_token):
     global fyers_ws
     try:
-        # BUG 4 FIX: direct class ব্যবহার করা হয়েছে
-        fyers_ws = FyersDataSocket(
+        # data_ws.FyersDataSocket ব্যবহার করা হলো যা মডিউলের সঠিক ক্লাস পাথ
+        fyers_ws = data_ws.FyersDataSocket(
             access_token=access_token,
             log_path="/tmp",
             litemode=False,
@@ -112,7 +112,7 @@ async def initialize_fyers_websocket(access_token):
         )
         fyers_ws.connect()
         
-        # BUG 5 FIX: socket disconnect রোধ করতে background task হিসেবে keep_running রাখা হলো
+        # সকেট ডিসকানেক্ট রোধ করতে ব্যাকগ্রাউন্ড টাস্ক
         asyncio.create_task(keep_running_socket())
     except Exception as e:
         print(f"Failed to activate real-time API websocket: {e}")
