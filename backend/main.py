@@ -362,42 +362,58 @@ def trigger_fyers_auth_channel(data: FyersAuthRequest):
 def process_app_code_registration_token(data: TokenRequest, background_tasks: BackgroundTasks):
     global fyers, CURRENT_CREDENTIALS
     try:
+        # Front-end theke asa data variables properly clean kora holo
         client_id = data.client_id.strip()
         secret_key = data.secret_key.strip()
+        auth_code = data.auth_code.strip()
         
+        print(f"🔑 Initializing Session Model for Client ID: {client_id}")
+
+        # 🎯 FIX: Valid Redirect URL ebong duto key-ee ekhne explicitly dewa holo
         session = fyersModel.SessionModel(
             client_id=client_id,
             secret_key=secret_key,
-            redirect_uri="http://localhost:3000/",
+            redirect_uri="https://algo-trading-frontend-app.vercel.app",  # Apnar proper frontend URL
             response_type="code",
             grant_type="authorization_code"
         )
         
-        session.set_token(data.auth_code.strip())
+        # Auth Code set kora holo
+        session.set_token(auth_code)
+        
+        # Token generate korar somoy core credentials cross-verify hoy
         response = session.generate_token()
+        print("Fyers API Token Response:", response)
         
         if "access_token" not in response:
-            raise HTTPException(status_code=400, detail="Access token validation rejected.")
+            error_msg = response.get("message", "Access token validation rejected by Fyers.")
+            raise HTTPException(status_code=400, detail=f"Fyers Auth Failed: {error_msg}")
             
         access_token = response["access_token"]
+        
+        # Fyers Model core initialization with real token
         fyers = fyersModel.FyersModel(client_id=client_id, token=access_token, log_path="/tmp")
         
+        # Storage Core-e save kora
         expiry_time = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         save_token_to_file({
             "access_token": access_token,
             "client_id": client_id,
+            "secret_key": secret_key,
             "expiry": expiry_time
         })
 
+        # Global system state update
         CURRENT_CREDENTIALS["client_id"] = client_id
         CURRENT_CREDENTIALS["secret_key"] = secret_key
         SYSTEM_SETTINGS["fyers_connected"] = True
         
-        # 🛠️ FIX: BackgroundTasks ব্যবহার করা হয়েছে যাতে রেন্ডারে ইভেন্ট লুপ ড্রপ না হয়
+        # ⚡ Background-e websocket auto startup complete kora
         background_tasks.add_task(run_fyers_websocket_sync, access_token)
         
         return {"status": "success", "message": "Fyers Engine Token Saved & Market Data Socket Activated!"}
     except Exception as e:
+        print(f"🚨 Token generation endpoint crashed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Backtest Module 
