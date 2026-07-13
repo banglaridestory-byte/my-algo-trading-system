@@ -598,9 +598,9 @@ export default function AlgoTradingApp() {
                     >
                       <div className="space-y-1">
                         <div className="text-xs font-bold tracking-wide text-zinc-200 uppercase">{symbol}</div>
-                        <div className={`text-[10px] font-mono ${data.change >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          {data.change >= 0 ? '+' : ''}{data.change?.toFixed(2)}% TODAY
-                        </div>
+                        <div className={`text-[10px] font-mono ${(data.change ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+  {(data.change ?? 0) >= 0 ? '+' : ''}{data.change?.toFixed(2)}% TODAY
+</div>
                       </div>
                       <div className="flex items-center space-x-4">
                         <div className="text-right font-mono">
