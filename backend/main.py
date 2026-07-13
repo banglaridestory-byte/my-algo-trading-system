@@ -18,7 +18,7 @@ except ImportError:
     strategies = DummyStrategies()
 
 from fyers_apiv3 import fyersModel
-from fyers_apiv3.FyersWebsocket.FyersWebsocket import FyersDataSocket
+from fyers_apiv3.FyersWebsocket import fyersModelws
 
 app = FastAPI(title="⚡ APEX QUANT Enterprise Terminal Pro")
 
